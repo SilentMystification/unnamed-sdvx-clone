@@ -22,6 +22,9 @@ BaseGameSettingsDialog::~BaseGameSettingsDialog()
 	g_input.OnButtonReleased.RemoveAll(this);
 	g_input.OnButtonPressed.RemoveAll(this);
 	g_gameWindow->OnKeyPressed.RemoveAll(this);
+	g_gameWindow->OnTextInput.RemoveAll(this);
+	g_gameWindow->OnKeyRepeat.RemoveAll(this);
+	SDL_StopTextInput();
 }
 
 void BaseGameSettingsDialog::ResetTabs()
@@ -68,6 +71,9 @@ void BaseGameSettingsDialog::Tick(float deltaTime)
         m_enableFXInputs = !g_input.GetButton(Input::Button::FX_0) && !g_input.GetButton(Input::Button::FX_1);
     }
 
+    if (m_editingSetting)
+        return; // typed entry in progress - knobs shouldn't navigate or step values
+
     //tick inputs
     for (size_t i = 0; i < 2; i++)
     {
@@ -104,7 +110,7 @@ void BaseGameSettingsDialog::Tick(float deltaTime)
     else
     {
         const int knobAdvance1Trunc = static_cast<int>(truncf(m_knobAdvance[1]));
-        m_ChangeStepSetting(knobAdvance1Trunc);
+        m_NavigateColumn(knobAdvance1Trunc);
         m_knobAdvance[1] -= knobAdvance1Trunc;
     }
 }
@@ -139,6 +145,15 @@ bool BaseGameSettingsDialog::Init()
     g_input.OnButtonPressed.Add(this, &BaseGameSettingsDialog::m_OnButtonPressed);
     g_input.OnButtonReleased.Add(this, &BaseGameSettingsDialog::m_OnButtonReleased);
     g_gameWindow->OnKeyPressed.Add(this, &BaseGameSettingsDialog::m_OnKeyPressed);
+
+    // Text input stays on for the dialog's whole lifetime (not just while a value
+    // is being edited) so that typing on a selected-but-not-yet-editing Integer/
+    // String row can be caught as the trigger to start an (Excel-style, overwrite)
+    // edit - see m_OnEditTextInput. It doesn't interfere with button/knob input,
+    // which reads raw key/controller state independently of text input mode.
+    SDL_StartTextInput();
+    g_gameWindow->OnTextInput.Add(this, &BaseGameSettingsDialog::m_OnEditTextInput);
+    g_gameWindow->OnKeyRepeat.Add(this, &BaseGameSettingsDialog::m_OnEditKeyRepeat);
 
     m_isInitialized = true;
 
@@ -302,7 +317,7 @@ void BaseGameSettingsDialog::m_SetTables()
             for (auto& tab : m_tabs)
             {
                 lua_pushinteger(m_lua, ++tabCounter);
-                tab->SetLua(m_lua);
+                tab->SetLua(m_lua, m_editingSetting);
                 lua_settable(m_lua, -3);
             }
             lua_settable(m_lua, -3);
@@ -321,6 +336,9 @@ void BaseGameSettingsDialog::m_OnButtonPressed(Input::Button button, int32 delta
 {
     if (!m_active || m_closing)
         return;
+
+    if (m_editingSetting)
+        return; // typed entry has its own Enter/Escape handling in m_OnKeyPressed
 
     switch (button)
     {
@@ -346,6 +364,9 @@ void BaseGameSettingsDialog::m_OnButtonPressed(Input::Button button, int32 delta
 void BaseGameSettingsDialog::m_OnButtonReleased(Input::Button button, int32 delta)
 {
     if (!m_active || m_closing || !m_enableFXInputs)
+        return;
+
+    if (m_editingSetting)
         return;
 
     switch (button)
@@ -391,6 +412,11 @@ void BaseGameSettingsDialog::m_AdvanceSelection(int steps)
 
     if (steps != 0)
         m_knobAdvance[1] = 0.0f;
+}
+
+void BaseGameSettingsDialog::m_NavigateColumn(int steps)
+{
+    m_ChangeStepSetting(steps);
 }
 void BaseGameSettingsDialog::m_AdvanceTab(int steps)
 {
@@ -448,6 +474,9 @@ void BaseGameSettingsDialog::m_PressSetting()
 
     auto currentSetting = m_tabs[m_currentTab]->settings.at(m_currentSetting).get();
 
+    if (currentSetting->invalid)
+        return; // e.g. a drill row whose in/out points are invalid - can't be selected
+
     switch (currentSetting->type)
     {
     case SettingType::Button:
@@ -456,11 +485,146 @@ void BaseGameSettingsDialog::m_PressSetting()
         currentSetting->boolSetting.val = !currentSetting->boolSetting.val;
         break;
     default:
-        // Do not call a setter for non-pressables
+        // Do not call a setter for non-pressables (Integer/String editing is
+        // started by Enter, via m_OnEnterPressed, not Select/BT_S)
         return;
     }
 
     currentSetting->setter.Call(*currentSetting);
+}
+
+void BaseGameSettingsDialog::m_OnEnterPressed()
+{
+    if (static_cast<size_t>(m_currentSetting) >= m_tabs[m_currentTab]->settings.size())
+        return;
+
+    auto currentSetting = m_tabs[m_currentTab]->settings.at(m_currentSetting).get();
+
+    // Typing only makes sense with a keyboard - a controller-only player has no way
+    // to enter text or Escape back out, so leave Integer/String rows as a no-op for
+    // them (they can still step Integer values with Left/Right/knob/BT0-3 as before).
+    if (currentSetting->type == SettingType::Integer || currentSetting->type == SettingType::String)
+    {
+        if (g_gameConfig.GetEnum<Enum_InputDevice>(GameConfigKeys::ButtonInputDevice) == InputDevice::Keyboard)
+            m_StartEditingValue(currentSetting);
+        return;
+    }
+
+    // Everything else (buttons, booleans) - Enter acts the same as Select/BT_S
+    m_PressSetting();
+}
+
+void BaseGameSettingsDialog::m_StartEditingValue(SettingData* setting, bool startEmpty)
+{
+    m_editingSetting = setting;
+
+    if (setting->type == SettingType::String)
+    {
+        m_editOriginalString = setting->stringSetting.val;
+        m_editBuffer = startEmpty ? "" : setting->stringSetting.val;
+    }
+    else
+    {
+        m_editOriginalValue = setting->intSetting.val;
+        m_editBuffer = startEmpty ? "" : Utility::Sprintf("%d", setting->intSetting.val);
+    }
+}
+
+void BaseGameSettingsDialog::m_StopEditingValue()
+{
+    // Text input itself stays on for the dialog's whole lifetime (see Init) so a
+    // fresh keystroke on the next selected row can immediately start editing it.
+    m_editingSetting = nullptr;
+    m_editBuffer.clear();
+}
+
+void BaseGameSettingsDialog::m_CommitEditingValue()
+{
+    if (!m_editingSetting)
+        return;
+
+    SettingData* setting = m_editingSetting;
+
+    if (setting->type == SettingType::String)
+    {
+        setting->stringSetting.val = m_editBuffer;
+    }
+    else
+    {
+        const int parsed = m_editBuffer.empty() ? 0 : atoi(*m_editBuffer);
+        setting->intSetting.val = Math::Clamp(parsed, setting->intSetting.min, setting->intSetting.max);
+    }
+
+    m_StopEditingValue();
+    setting->setter.Call(*setting);
+}
+
+void BaseGameSettingsDialog::m_CancelEditingValue()
+{
+    if (m_editingSetting)
+    {
+        if (m_editingSetting->type == SettingType::String)
+            m_editingSetting->stringSetting.val = m_editOriginalString;
+        else
+            m_editingSetting->intSetting.val = m_editOriginalValue;
+    }
+
+    m_StopEditingValue();
+}
+
+void BaseGameSettingsDialog::m_OnEditTextInput(const String& text)
+{
+    if (!m_active || m_closing)
+        return;
+
+    if (!m_editingSetting)
+    {
+        // Not editing yet - typing on a selected Integer/String row is the
+        // Excel-style trigger to start editing it, overwriting whatever was
+        // there (as opposed to Enter, which preloads the current value to
+        // modify - see m_OnEnterPressed). Anything else (wrong row type, no
+        // keyboard) is ignored rather than starting an edit.
+        if (static_cast<size_t>(m_currentSetting) >= m_tabs[m_currentTab]->settings.size())
+            return;
+
+        SettingData* currentSetting = m_tabs[m_currentTab]->settings.at(m_currentSetting).get();
+        if (currentSetting->type != SettingType::Integer && currentSetting->type != SettingType::String)
+            return;
+        if (g_gameConfig.GetEnum<Enum_InputDevice>(GameConfigKeys::ButtonInputDevice) != InputDevice::Keyboard)
+            return;
+
+        m_StartEditingValue(currentSetting, /*startEmpty=*/true);
+    }
+
+    const bool isString = m_editingSetting->type == SettingType::String;
+    const size_t maxLength = isString ? m_editingSetting->stringSetting.maxLength : 9;
+
+    for (char c : text)
+    {
+        if (m_editBuffer.length() >= maxLength)
+            break;
+
+        if (isString ? (c >= 32 && c != 127) : (c >= '0' && c <= '9'))
+            m_editBuffer += c;
+    }
+
+    if (isString)
+        m_editingSetting->stringSetting.val = m_editBuffer;
+    else
+        m_editingSetting->intSetting.val = m_editBuffer.empty() ? 0 : atoi(*m_editBuffer);
+}
+
+void BaseGameSettingsDialog::m_OnEditKeyRepeat(SDL_Scancode code)
+{
+    if (!m_editingSetting || code != SDL_SCANCODE_BACKSPACE || m_editBuffer.empty())
+        return;
+
+    m_editBuffer = m_editBuffer.substr(0, m_editBuffer.length() - 1);
+
+    if (m_editingSetting->type == SettingType::String)
+        m_editingSetting->stringSetting.val = m_editBuffer;
+    else
+        m_editingSetting->intSetting.val = m_editBuffer.empty() ? 0 : atoi(*m_editBuffer);
 }
 
 void BaseGameSettingsDialog::m_OnKeyPressed(SDL_Scancode code, int32 delta)
@@ -468,16 +632,34 @@ void BaseGameSettingsDialog::m_OnKeyPressed(SDL_Scancode code, int32 delta)
     if (!m_active || m_closing)
         return;
 
+    if (m_editingSetting)
+    {
+        if (code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_KP_ENTER)
+            m_CommitEditingValue();
+        else if (code == SDL_SCANCODE_ESCAPE)
+            m_CancelEditingValue();
+        // Digits go through m_OnEditTextInput, backspace through m_OnEditKeyRepeat -
+        // everything else (including keyboard '1', which is also BT_S) is swallowed.
+        return;
+    }
+
     switch (code)
     {
+    case SDL_SCANCODE_RETURN:
+    case SDL_SCANCODE_KP_ENTER:
+        m_OnEnterPressed();
+        break;
     case SDL_SCANCODE_LEFT:
-        m_ChangeStepSetting(-1);
+        m_NavigateColumn(-1);
         break;
     case SDL_SCANCODE_RIGHT:
-        m_ChangeStepSetting(1);
+        m_NavigateColumn(1);
         break;
     case SDL_SCANCODE_TAB:
-        m_AdvanceTab(1);
+        if ((g_gameWindow->GetModifierKeys() & ModifierKeys::Shift) == ModifierKeys::Shift)
+            m_AdvanceTab(-1);
+        else
+            m_AdvanceTab(1);
         break;
     case SDL_SCANCODE_UP:
         m_AdvanceSelection(-1);
@@ -490,7 +672,7 @@ void BaseGameSettingsDialog::m_OnKeyPressed(SDL_Scancode code, int32 delta)
     }
 }
 
-void BaseGameSettingsDialog::TabData::SetLua(lua_State* lua)
+void BaseGameSettingsDialog::TabData::SetLua(lua_State* lua, const SettingData* editingSetting)
 {
     lua_newtable(lua);
     pushStringToTable(lua, "name", name);
@@ -504,8 +686,15 @@ void BaseGameSettingsDialog::TabData::SetLua(lua_State* lua)
             lua_newtable(lua);
             pushStringToTable(lua, "name", setting->name);
 
-            // Also get settings values in case they've been changed elsewhere
-            setting->getter.Call(*setting);
+            const bool isEditing = setting.get() == editingSetting;
+            pushBoolToTable(lua, "isEditing", isEditing);
+            pushBoolToTable(lua, "invalid", setting->invalid);
+
+            // Also get settings values in case they've been changed elsewhere - except
+            // the row currently being typed into, whose getter would otherwise
+            // overwrite the in-progress value with the last committed one every frame.
+            if (!isEditing)
+                setting->getter.Call(*setting);
 
             switch (setting->type)
             {
@@ -553,6 +742,10 @@ void BaseGameSettingsDialog::TabData::SetLua(lua_State* lua)
                 break;
             case SettingType::Button:
                 pushStringToTable(lua, "type", "button");
+                break;
+            case SettingType::String:
+                pushStringToTable(lua, "type", "string");
+                pushStringToTable(lua, "value", setting->stringSetting.val);
                 break;
             }
             lua_settable(lua, -3);

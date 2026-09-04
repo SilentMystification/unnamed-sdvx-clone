@@ -159,6 +159,23 @@ int Beatmap::GetMeasureIndFromMapTime(MapTime time) const
 	return 0;
 }
 
+MapTime Beatmap::GetMapTimeFromMeasureBeat(int measure, int beat) const
+{
+	const MapTime measureTime = GetMapTimeFromMeasureInd(measure);
+	const TimingPointsIterator tp = GetTimingPoint(measureTime);
+	const double beatDuration = tp->GetWholeNoteLength() / tp->denominator;
+	return measureTime + static_cast<MapTime>(beatDuration * beat);
+}
+
+void Beatmap::GetMeasureBeatFromMapTime(MapTime time, int& measure, int& beat) const
+{
+	measure = GetMeasureIndFromMapTime(time);
+	const MapTime measureTime = GetMapTimeFromMeasureInd(measure);
+	const TimingPointsIterator tp = GetTimingPoint(measureTime);
+	const double beatDuration = tp->GetWholeNoteLength() / tp->denominator;
+	beat = static_cast<int>(MEASURE_EPSILON + (time - measureTime) / beatDuration);
+}
+
 double Beatmap::GetModeBPM() const
 {
 	Map<double, MapTime> bpmDurations;

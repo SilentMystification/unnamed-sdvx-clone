@@ -10,6 +10,7 @@ enum class SettingType
     Boolean,
     Enum,
     Button,
+    String,
 };
 
 // Base class for popup dialog for game settings
@@ -27,6 +28,12 @@ public:
         Delegate<SettingData&> getter;
         // Called when the setting is updated
         Delegate<const SettingData&> setter;
+        // Optional, set by the getter alongside the value: marks this row as
+        // currently holding an invalid value/state. Purely a display hint for the
+        // skin (e.g. render red, swap a button's label) - never blocks editing or
+        // committing. For a Button row, also blocks Enter/Select from pressing it
+        // (see m_PressSetting).
+        bool invalid = false;
 
         struct
         {
@@ -57,6 +64,12 @@ public:
             bool val;
         } boolSetting;
 
+        struct
+        {
+            String val;
+            size_t maxLength = 32;
+        } stringSetting;
+
     } SettingData;
     typedef std::unique_ptr<SettingData> Setting;
 
@@ -65,7 +78,7 @@ public:
         String name;
         Vector<Setting> settings;
 
-        void SetLua(struct lua_State* lua);
+        void SetLua(struct lua_State* lua, const SettingData* editingSetting);
     } TabData;
     typedef std::unique_ptr<TabData> Tab;
 
@@ -118,11 +131,25 @@ protected:
     inline int GetCurrentTab() const noexcept { return m_currentTab; }
     inline void SetCurrentTab(int tabIndex) noexcept { m_currentTab = tabIndex; }
 
+    [[nodiscard]]
+    inline int GetCurrentSetting() const noexcept { return m_currentSetting; }
+    inline void SetCurrentSetting(int settingIndex) noexcept { m_currentSetting = settingIndex; }
+    [[nodiscard]]
+    inline size_t GetTabSettingsCount(int tabIndex) const { return m_tabs[tabIndex]->settings.size(); }
+
+    // Up/Down (and knob 0): which row is selected within the current tab.
+    // Default: move one row at a time through the tab's flat setting list.
+    virtual void m_AdvanceSelection(int steps);
+    // Left/Right (and knob 1): default forwards to m_ChangeStepSetting (edit the
+    // current row's value) - kept separate from BT0-3, which always call
+    // m_ChangeStepSetting directly, so a tab can override just this one to mean
+    // "navigate between sub-options" without losing BT0-3 as a way to edit values.
+    virtual void m_NavigateColumn(int steps);
+
     Vector2 m_pos = { 0.5f, 0.5f };
 
 private:
     void m_SetTables();
-    void m_AdvanceSelection(int steps);
     void m_AdvanceTab(int steps);
     void m_ChangeStepSetting(int steps); //int, enum, toggle, are all advanced in distinct steps
     void m_PressSetting();
@@ -130,6 +157,31 @@ private:
     void m_OnButtonReleased(Input::Button button, int32 delta);
     void m_OnKeyPressed(SDL_Scancode code, int32 delta);
     void m_ResetTabs();
+
+    // Typed keyboard entry for the currently-selected Integer/String row,
+    // triggered by pressing Enter on it (Enter is the dedicated "start editing"
+    // key - BT_S/Select still only presses buttons and toggles booleans, same
+    // as before this feature existed, so a controller's Select action never
+    // changes meaning). While active, all other button/key input is suppressed
+    // (see the guards in m_OnButtonPressed/m_OnButtonReleased/Tick) so typed
+    // digits/characters - including keyboard '1', which doubles as BT_S - can't
+    // also trigger unrelated dialog actions, the same way SongSelect's search
+    // bar suppresses normal input while it has focus.
+    void m_OnEnterPressed();
+    // startEmpty: true for "start typing to overwrite" (Excel-style - the
+    // triggering character is applied on top of an empty buffer), false for
+    // "Enter to modify" (buffer preloaded with the current value).
+    void m_StartEditingValue(SettingData* setting, bool startEmpty = false);
+    void m_StopEditingValue();
+    void m_CommitEditingValue();
+    void m_CancelEditingValue();
+    void m_OnEditTextInput(const String& text);
+    void m_OnEditKeyRepeat(SDL_Scancode code);
+
+    SettingData* m_editingSetting = nullptr;
+    String m_editBuffer;
+    int m_editOriginalValue = 0;
+    String m_editOriginalString;
 
     // Set a target in open/close and apply it in the next tick because stuff
     bool m_targetActive = false;

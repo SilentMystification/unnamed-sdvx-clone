@@ -103,6 +103,12 @@ public:
 	[[nodiscard]]
 	int GetMeasureIndFromMapTime(MapTime time) const;
 
+	/// Measure (0-indexed) + beat (0-indexed, 0..numerator-1 at that measure) -> Time
+	[[nodiscard]]
+	MapTime GetMapTimeFromMeasureBeat(int measure, int beat) const;
+	/// Time -> Measure (0-indexed) + beat (0-indexed, 0..numerator-1 at that measure)
+	void GetMeasureBeatFromMapTime(MapTime time, int& measure, int& beat) const;
+
 	/// Computes the most frequently occuring BPM (to be used for MMod)
 	[[nodiscard]]
 	double GetModeBPM() const;

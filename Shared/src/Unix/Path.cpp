@@ -43,7 +43,7 @@ bool Path::Rename(const String& srcFile, const String& dstFile, bool overwrite)
 	{
 		if(!overwrite)
 			return false;
-		if(Delete(*dstFile))
+		if(!Delete(*dstFile))
 		{
 			Log("Failed to rename file, overwrite was true but the destination could not be removed", Logger::Severity::Warning);
 			return false;

@@ -131,11 +131,14 @@ local lastCellValue = {} -- trackingId.."_"..field -> value, to detect a change
 
 -- Draws one numeric cell of a drill row. Plain arguments, not a per-row table
 -- of per-cell tables - avoids per-frame allocation that showed up as stutter.
-local function drawDrillCell(settings, currentSetting, idx, cx, cellW, textY, fieldKey, deltaTime, isCurrentRow)
+local function drawDrillCell(settings, currentSetting, idx, cx, cellW, textY, fieldKey, deltaTime, isCurrentRow, isRowArmed)
     local cs = settings[idx]
     local isCurrent = idx == currentSetting
 
-    if cs.isEditing then
+    if isRowArmed then
+        gfx.FillColor(255, 60, 60)
+        gfx.Text(cs.value == 0 and "" or tostring(cs.value), cx + cellW / 2, textY)
+    elseif cs.isEditing then
         -- No flash while typing - hold still so the value being typed stays readable.
         if cs.invalid then
             gfx.FillColor(255, 60, 60)
@@ -289,8 +292,13 @@ local function drawDrillsGrid(tab, diagWidth, availableHeight, deltaTime)
         end
         lastRowPosition[trackingId] = row
 
+        local rowArmed = deleteSetting.armed
+
         gfx.TextAlign(gfx.TEXT_ALIGN_LEFT + gfx.TEXT_ALIGN_MIDDLE)
-        if renameSetting.isEditing then
+        if rowArmed then
+            gfx.FillColor(255, 60, 60)
+            gfx.Text(renameSetting.value, nameX, rowMidY)
+        elseif renameSetting.isEditing then
             gfx.FillColor(255, 200, 0)
             gfx.Text(renameSetting.value .. "_", nameX, rowMidY)
         elseif isRenameCurrent then
@@ -307,16 +315,16 @@ local function drawDrillsGrid(tab, diagWidth, availableHeight, deltaTime)
         end
 
         gfx.TextAlign(gfx.TEXT_ALIGN_CENTER + gfx.TEXT_ALIGN_MIDDLE)
-        drawDrillCell(settings, currentSetting, inMIdx, inMX, cellW, rowMidY, "_inM", deltaTime, isCurrentRow)
-        drawDrillCell(settings, currentSetting, inBIdx, inBX, cellW, rowMidY, "_inB", deltaTime, isCurrentRow)
-        drawDrillCell(settings, currentSetting, outMIdx, outMX, cellW, rowMidY, "_outM", deltaTime, isCurrentRow)
-        drawDrillCell(settings, currentSetting, outBIdx, outBX, cellW, rowMidY, "_outB", deltaTime, isCurrentRow)
+        drawDrillCell(settings, currentSetting, inMIdx, inMX, cellW, rowMidY, "_inM", deltaTime, isCurrentRow, rowArmed)
+        drawDrillCell(settings, currentSetting, inBIdx, inBX, cellW, rowMidY, "_inB", deltaTime, isCurrentRow, rowArmed)
+        drawDrillCell(settings, currentSetting, outMIdx, outMX, cellW, rowMidY, "_outM", deltaTime, isCurrentRow, rowArmed)
+        drawDrillCell(settings, currentSetting, outBIdx, outBX, cellW, rowMidY, "_outB", deltaTime, isCurrentRow, rowArmed)
 
         -- Swap DELETE for INVALID when the drill's invalid, unless hovering Delete
         -- itself (still deletable); armed = awaiting a confirming 2nd press.
         local deleteLabel = "DELETE"
         local deleteR, deleteG, deleteB = 200, 200, 200
-        if deleteSetting.armed then
+        if rowArmed then
             deleteLabel = "REALLY?"
             deleteR, deleteG, deleteB = 255, 160, 0
         elseif isDeleteCurrent then

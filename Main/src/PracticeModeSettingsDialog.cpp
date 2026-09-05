@@ -516,8 +516,14 @@ PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateDrillsTab()
             s->setter.AddLambda([this, i](const SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
                 m_PushUndo();
+                const int followId = m_drillSet.drills[i].uiId;
                 m_drillSet.drills[i].outMeasure = data.intSetting.val;
                 m_drillsDirty = true;
+                // No-op for an already-complete drill (sort key is start point only),
+                // but this may be what just made an incomplete one complete - without
+                // this, it'd stay stuck at the end of the list until something else
+                // triggered a resort.
+                m_SortDrillsAndFollow(followId, DrillColumn::OutMeasure);
             });
             drillsTab->settings.emplace_back(std::move(s));
         }

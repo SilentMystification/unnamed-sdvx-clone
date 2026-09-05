@@ -646,12 +646,22 @@ void BaseGameSettingsDialog::m_OnKeyPressed(SDL_Scancode code, int32 delta)
     if (m_editingSetting)
     {
         if (code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_KP_ENTER)
+        {
             m_CommitEditingValue();
-        else if (code == SDL_SCANCODE_ESCAPE)
+            return;
+        }
+        if (code == SDL_SCANCODE_ESCAPE)
+        {
             m_CancelEditingValue();
-        // Digits go through m_OnEditTextInput, backspace through m_OnEditKeyRepeat -
-        // everything else (including keyboard '1', which is also BT_S) is swallowed.
-        return;
+            return;
+        }
+        // Arrow keys commit (like Enter) and then fall through to the normal
+        // navigation below, so typing a value and arrowing straight to the next
+        // field works, instead of arrow doing nothing until Enter is pressed first.
+        if (code == SDL_SCANCODE_LEFT || code == SDL_SCANCODE_RIGHT || code == SDL_SCANCODE_UP || code == SDL_SCANCODE_DOWN)
+            m_CommitEditingValue();
+        else
+            return; // digits go through m_OnEditTextInput, backspace through m_OnEditKeyRepeat
     }
 
     switch (code)

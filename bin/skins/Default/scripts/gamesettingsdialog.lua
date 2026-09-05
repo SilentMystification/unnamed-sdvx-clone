@@ -131,7 +131,7 @@ local lastCellValue = {} -- trackingId.."_"..field -> value, to detect a change
 
 -- Draws one numeric cell of a drill row. Plain arguments, not a per-row table
 -- of per-cell tables - avoids per-frame allocation that showed up as stutter.
-local function drawDrillCell(settings, currentSetting, idx, cx, cellW, textY, fieldKey, deltaTime)
+local function drawDrillCell(settings, currentSetting, idx, cx, cellW, textY, fieldKey, deltaTime, isCurrentRow)
     local cs = settings[idx]
     local isCurrent = idx == currentSetting
 
@@ -147,9 +147,10 @@ local function drawDrillCell(settings, currentSetting, idx, cx, cellW, textY, fi
         drawInvalidCellText(cs.value, cx, cellW, textY)
     else
         -- Flash green-to-white when this cell's value changes while staying valid.
+        -- Only checked for the current row, so only the row being edited can ever flash.
         local key = cs.trackingId .. fieldKey
         local lastVal = lastCellValue[key]
-        if lastVal ~= nil and lastVal ~= cs.value then
+        if isCurrentRow and lastVal ~= nil and lastVal ~= cs.value then
             getFlashAnim(cellValidAnimations, key):restart(1, 0, 0.6)
         end
         lastCellValue[key] = cs.value
@@ -275,13 +276,15 @@ local function drawDrillsGrid(tab, diagWidth, availableHeight, deltaTime)
         local isRenameCurrent = renameIdx == currentSetting
         local isDeleteCurrent = deleteIdx == currentSetting
 
+        local isCurrentRow = rowIndex0 == currentVisualRow
+
         -- Did THIS drill (the one under the cursor) move to a different row (a
         -- resort)? Only checked for the current row, not every row - a resort
         -- shifts every row between the old and new position by one, and they'd
         -- all look "moved" too if compared the same way.
         local trackingId = selectSetting.trackingId
         local prevRow = lastRowPosition[trackingId]
-        if rowIndex0 == currentVisualRow and prevRow ~= nil and prevRow ~= row then
+        if isCurrentRow and prevRow ~= nil and prevRow ~= row then
             getFlashAnim(rowMoveAnimations, trackingId):restart(1, 0, 0.6)
         end
         lastRowPosition[trackingId] = row
@@ -304,10 +307,10 @@ local function drawDrillsGrid(tab, diagWidth, availableHeight, deltaTime)
         end
 
         gfx.TextAlign(gfx.TEXT_ALIGN_CENTER + gfx.TEXT_ALIGN_MIDDLE)
-        drawDrillCell(settings, currentSetting, inMIdx, inMX, cellW, rowMidY, "_inM", deltaTime)
-        drawDrillCell(settings, currentSetting, inBIdx, inBX, cellW, rowMidY, "_inB", deltaTime)
-        drawDrillCell(settings, currentSetting, outMIdx, outMX, cellW, rowMidY, "_outM", deltaTime)
-        drawDrillCell(settings, currentSetting, outBIdx, outBX, cellW, rowMidY, "_outB", deltaTime)
+        drawDrillCell(settings, currentSetting, inMIdx, inMX, cellW, rowMidY, "_inM", deltaTime, isCurrentRow)
+        drawDrillCell(settings, currentSetting, inBIdx, inBX, cellW, rowMidY, "_inB", deltaTime, isCurrentRow)
+        drawDrillCell(settings, currentSetting, outMIdx, outMX, cellW, rowMidY, "_outM", deltaTime, isCurrentRow)
+        drawDrillCell(settings, currentSetting, outBIdx, outBX, cellW, rowMidY, "_outB", deltaTime, isCurrentRow)
 
         -- Swap DELETE for INVALID when the drill's invalid, unless hovering Delete
         -- itself (still deletable); armed = awaiting a confirming 2nd press.

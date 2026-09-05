@@ -5,6 +5,11 @@
 #include "Game.hpp"
 
 struct ChartIndex;
+
+// Column order matches m_CreateDrillsTab's emplace_back order - Select is
+// always reachable via Up/Down (m_AdvanceSelection), the rest via Left/Right.
+enum class DrillColumn { Select, Rename, InMeasure, InBeat, OutMeasure, OutBeat, Delete };
+
 class PracticeModeSettingsDialog : public BaseGameSettingsDialog
 {
 public:
@@ -28,19 +33,51 @@ private:
 	Tab m_CreateGameSettingTab();
 
 	void OnAdvanceTab() override;
+	void OnDeleteKeyPressed() override;
+	void OnUndoPressed() override;
+	void OnRedoPressed() override;
 	void m_SaveDrillsIfDirty();
 
-	// On the Drills tab: Up/Down moves between whole drills (always landing back
-	// on the Select sub-option, not whichever column you were on), Left/Right
-	// moves between the sub-options (Select/Rename/In-Measure/In-Beat/
-	// Out-Measure/Out-Beat/Delete) within the current drill. Falls back to the
-	// base class's flat row navigation on every other tab. Both flush a pending
-	// drill save when they move off the current drill/field.
+	// On the Drills tab: Up/Down moves between drills (landing on Select), Left/
+	// Right moves between a drill's sub-fields. Falls back to flat row
+	// navigation on every other tab.
 	void m_AdvanceSelection(int steps) override;
 	void m_NavigateColumn(int steps) override;
 
 	static constexpr int kDrillsTabIndex = 1; // Drills is the 2nd tab added in InitTabs()
 	static constexpr int kDrillGroupSize = 7; // Select, Rename, In-Measure, In-Beat, Out-Measure, Out-Beat, Delete
+	static constexpr size_t kMaxUndoDepth = 50;
+
+	// Drills stay sorted by start point ascending. followUiId/col land the
+	// cursor back on the right drill/column after the reorder moves its row.
+	void m_SortDrillsInPlace();
+	void m_SortDrillsAndFollow(int followUiId, DrillColumn col);
+
+	// Remembers which drill (by row) to land on when re-entering the Drills tab
+	// or reopening the dialog - persisted via DrillSet::selectedIndex.
+	void m_RememberSelectedDrill(int row);
+
+	int m_AllocDrillId() { return m_nextDrillId++; }
+	int m_nextDrillId = 1;
+
+	// Re-clamps GetCurrentSetting() after Delete/Undo/Redo shrinks the drill
+	// list, else the underline desyncs until the next arrow key wraps it back.
+	void m_ClampCurrentSettingToDrills();
+
+	// Drills-tab-only undo/redo. m_PushUndo() snapshots the list before a
+	// mutation and clears the redo stack.
+	void m_PushUndo();
+	Vector<Vector<Drill>> m_undoStack;
+	Vector<Vector<Drill>> m_redoStack;
+
+	// Clamps loaded drills to the chart's current range/time signature, in case
+	// the chart was re-edited since a drill was saved. Marks m_drillsDirty if changed.
+	void m_ClampDrills();
+
+	// Drill index of a Delete awaiting a second, confirming request; -1 if none armed.
+	int m_pendingDeleteIndex = -1;
+	// Shared by the Delete button and Del key - arms on first call, deletes on the second.
+	void m_RequestDeleteDrill(size_t i);
 
 	inline MapTime m_MeasureToTime(int measure) const { return m_beatmap->GetMapTimeFromMeasureInd(measure-1); }
 	inline int m_TimeToMeasure(MapTime time) const { return m_beatmap->GetMeasureIndFromMapTime(time)+1; }
@@ -56,8 +93,11 @@ private:
 	// Valid beat range (1..numerator) at the given 1-indexed measure
 	inline int m_NumeratorAtMeasure(int measure) const { return m_beatmap->GetTimingPoint(m_MeasureToTime(measure))->numerator; }
 
-	void m_SetStartTime(MapTime time, int measure = -1);
-	void m_SetEndTime(MapTime time, int measure = -1);
+	// seek=false updates display state without seeking the playhead - needed for
+	// m_CreateLoopingTab's construction-time calls, since InitTabs() reruns on
+	// every ResetTabs() (e.g. a drill edit) and would otherwise re-seek then too.
+	void m_SetStartTime(MapTime time, int measure = -1, bool seek = true);
+	void m_SetEndTime(MapTime time, int measure = -1, bool seek = true);
 
 	DrillSet m_drillSet;
 	bool m_drillsDirty = false;

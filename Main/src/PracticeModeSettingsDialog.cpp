@@ -2,10 +2,7 @@
 #include "PracticeModeSettingsDialog.hpp"
 #include "Beatmap/MapDatabase.hpp"
 
-// A drill is invalid when its in-point isn't strictly before its out-point.
-// measureCulprit tells the caller which pair of fields (measure or beat) is
-// responsible, so the UI can highlight just that pair - only meaningful when
-// invalid is true.
+// measureCulprit says which pair (measure or beat) made the drill invalid.
 static void ComputeDrillValidity(const Drill& d, bool& invalid, bool& measureCulprit)
 {
     if (d.inMeasure > d.outMeasure)
@@ -25,6 +22,29 @@ static void ComputeDrillValidity(const Drill& d, bool& invalid, bool& measureCul
     }
 }
 
+// A newly created drill has both measures blank (0) until typed in, and either
+// one can be filled in first - so this is true until BOTH are set, not just
+// while both are still blank. Otherwise setting just the start measure would
+// immediately make the drill "invalid" (in > out, since out is still 0) and
+// sort it into place, before the user's even had a chance to reach the end
+// measure - which is exactly the friction this is meant to avoid.
+static bool IsDrillIncomplete(const Drill& d)
+{
+    return d.inMeasure == 0 || d.outMeasure == 0;
+}
+
+enum class DrillField { Measure, Beat };
+
+// Shared by the 4 numeric cell getters below.
+static void FillNumericCellData(BaseGameSettingsDialog::SettingData& data, const Drill& d, int value, DrillField field)
+{
+    data.intSetting.val = value;
+    bool invalid = false, measureCulprit = false;
+    ComputeDrillValidity(d, invalid, measureCulprit);
+    data.invalid = invalid && (measureCulprit == (field == DrillField::Measure)) && !IsDrillIncomplete(d);
+    data.trackingId = d.uiId;
+}
+
 PracticeModeSettingsDialog::PracticeModeSettingsDialog(Game& game, MapTime& lastMapTime,
     int32& tempOffset, Game::PlayOptions& playOptions, MapTimeRange& range)
     : m_chartIndex(game.GetChartIndex()), m_beatmap(game.GetBeatmap()),
@@ -40,12 +60,170 @@ PracticeModeSettingsDialog::PracticeModeSettingsDialog(Game& game, MapTime& last
     m_condGauge = g_gameConfig.GetInt(GameConfigKeys::DefaultFailConditionGauge);
 
     m_drillSet = DrillSet::Load(m_chartIndex->path, m_chartIndex->hash);
+    m_ClampDrills();
+    for (Drill& d : m_drillSet.drills)
+        d.uiId = m_AllocDrillId();
+    m_SortDrillsInPlace(); // no tabs exist yet to rebuild - a plain in-place sort is enough here
 
     onClose.AddLambda([this]() { m_SaveDrillsIfDirty(); });
 }
 
+void PracticeModeSettingsDialog::m_SortDrillsInPlace()
+{
+    // Incomplete drills (IsDrillIncomplete) sort to the end instead of by
+    // whatever's been typed so far, so filling in one field doesn't make the
+    // row jump elsewhere in the list before the other field's even been set.
+    std::stable_sort(m_drillSet.drills.begin(), m_drillSet.drills.end(), [](const Drill& a, const Drill& b) {
+        const bool aSet = a.inMeasure > 0 && a.outMeasure > 0;
+        const bool bSet = b.inMeasure > 0 && b.outMeasure > 0;
+        if (aSet != bSet) return aSet;
+        if (!aSet) return false;
+        if (a.inMeasure != b.inMeasure) return a.inMeasure < b.inMeasure;
+        return a.inBeat < b.inBeat;
+    });
+}
+
+void PracticeModeSettingsDialog::m_SortDrillsAndFollow(int followUiId, DrillColumn col)
+{
+    m_SortDrillsInPlace();
+
+    for (size_t j = 0; j < m_drillSet.drills.size(); ++j)
+    {
+        if (m_drillSet.drills[j].uiId == followUiId)
+        {
+            SetCurrentSetting(static_cast<int>(j) * kDrillGroupSize + static_cast<int>(col));
+            m_RememberSelectedDrill(static_cast<int>(j));
+            break;
+        }
+    }
+
+    ResetTabs();
+}
+
+void PracticeModeSettingsDialog::m_RememberSelectedDrill(int row)
+{
+    if (m_drillSet.selectedIndex != row)
+    {
+        m_drillSet.selectedIndex = row;
+        m_drillsDirty = true;
+    }
+}
+
+void PracticeModeSettingsDialog::m_PushUndo()
+{
+    m_undoStack.Add(m_drillSet.drills);
+    m_redoStack.clear();
+    if (m_undoStack.size() > kMaxUndoDepth)
+        m_undoStack.erase(m_undoStack.begin());
+}
+
+void PracticeModeSettingsDialog::m_ClampCurrentSettingToDrills()
+{
+    const int numDrills = static_cast<int>(m_drillSet.drills.size());
+    const int maxIdx = numDrills * kDrillGroupSize + 1; // last valid row: Set-current-in/out
+    if (GetCurrentSetting() > maxIdx)
+        SetCurrentSetting(maxIdx);
+
+    // Delete/Undo/Redo can shift indices - keep the remembered selection
+    // matching wherever the cursor actually ends up.
+    const int cur = GetCurrentSetting();
+    if (numDrills > 0 && cur < numDrills * kDrillGroupSize)
+        m_RememberSelectedDrill(cur / kDrillGroupSize);
+}
+
+void PracticeModeSettingsDialog::OnUndoPressed()
+{
+    if (GetCurrentTab() != kDrillsTabIndex || m_undoStack.empty())
+        return;
+
+    m_redoStack.Add(m_drillSet.drills);
+    m_drillSet.drills = m_undoStack.back();
+    m_undoStack.erase(m_undoStack.end() - 1);
+    m_drillsDirty = true;
+    m_pendingDeleteIndex = -1;
+    m_ClampCurrentSettingToDrills();
+    ResetTabs();
+}
+
+void PracticeModeSettingsDialog::OnRedoPressed()
+{
+    if (GetCurrentTab() != kDrillsTabIndex || m_redoStack.empty())
+        return;
+
+    m_undoStack.Add(m_drillSet.drills);
+    m_drillSet.drills = m_redoStack.back();
+    m_redoStack.erase(m_redoStack.end() - 1);
+    m_drillsDirty = true;
+    m_pendingDeleteIndex = -1;
+    m_ClampCurrentSettingToDrills();
+    ResetTabs();
+}
+
+void PracticeModeSettingsDialog::m_RequestDeleteDrill(size_t i)
+{
+    if (i >= m_drillSet.drills.size())
+        return;
+
+    if (m_pendingDeleteIndex != static_cast<int>(i))
+    {
+        // First request arms the confirm; a second on the same drill (with nothing
+        // navigated/rebuilt in between - see m_AdvanceSelection etc.) actually deletes.
+        m_pendingDeleteIndex = static_cast<int>(i);
+        return;
+    }
+
+    m_PushUndo();
+    m_drillSet.drills.erase(m_drillSet.drills.begin() + i);
+    m_drillsDirty = true;
+    m_pendingDeleteIndex = -1;
+    m_ClampCurrentSettingToDrills();
+    ResetTabs();
+}
+
+void PracticeModeSettingsDialog::OnDeleteKeyPressed()
+{
+    if (GetCurrentTab() != kDrillsTabIndex)
+        return;
+
+    const int numDrills = static_cast<int>(m_drillSet.drills.size());
+    const int cur = GetCurrentSetting();
+    if (numDrills == 0 || cur >= numDrills * kDrillGroupSize)
+        return; // on a trailing button (Create New Drill / Set current in-out), not a drill row
+
+    m_RequestDeleteDrill(static_cast<size_t>(cur / kDrillGroupSize));
+}
+
+void PracticeModeSettingsDialog::m_ClampDrills()
+{
+    const int maxMeasure = m_TimeToMeasure(m_endTime);
+    bool changed = false;
+
+    for (Drill& d : m_drillSet.drills)
+    {
+        const int clampedInMeasure = Math::Clamp(d.inMeasure, 1, maxMeasure);
+        const int clampedOutMeasure = Math::Clamp(d.outMeasure, 1, maxMeasure);
+        // Beat's valid range depends on the (possibly just-clamped) measure's own
+        // numerator, which can differ from whatever it was when this drill was saved.
+        const int clampedInBeat = Math::Clamp(d.inBeat, 1, m_NumeratorAtMeasure(clampedInMeasure));
+        const int clampedOutBeat = Math::Clamp(d.outBeat, 1, m_NumeratorAtMeasure(clampedOutMeasure));
+
+        changed = changed || clampedInMeasure != d.inMeasure || clampedOutMeasure != d.outMeasure
+            || clampedInBeat != d.inBeat || clampedOutBeat != d.outBeat;
+
+        d.inMeasure = clampedInMeasure;
+        d.outMeasure = clampedOutMeasure;
+        d.inBeat = clampedInBeat;
+        d.outBeat = clampedOutBeat;
+    }
+
+    if (changed)
+        m_drillsDirty = true;
+}
+
 void PracticeModeSettingsDialog::InitTabs()
 {
+    m_pendingDeleteIndex = -1; // any full rebuild invalidates whichever row index was armed
+
     AddTab(m_CreateMainSettingTab());
     AddTab(m_CreateDrillsTab());
     AddTab(m_CreateLoopingTab());
@@ -53,22 +231,47 @@ void PracticeModeSettingsDialog::InitTabs()
     AddTab(m_CreateFailConditionTab());
     AddTab(m_CreateGameSettingTab());
 
-    // Note: no SetCurrentTab(0) here. InitTabs() is also re-invoked by ResetTabs()
-    // (BaseGameSettingsDialog::m_ResetTabs, used when Add/Delete/edit a drill), and
-    // forcing tab 0 there would snap the view back to General on every edit. The base
-    // class's Init() already sets m_currentTab = 0 before the first-ever InitTabs() call.
+    // No SetCurrentTab(0) here - InitTabs() also reruns via ResetTabs() (any drill
+    // edit), and that would snap the view back to Main every time.
 }
 
 void PracticeModeSettingsDialog::OnAdvanceTab()
 {
     m_SaveDrillsIfDirty();
+    m_pendingDeleteIndex = -1;
+
+    if (GetCurrentTab() != kDrillsTabIndex)
+        return;
+
+    // Land on the remembered drill, falling back to the first if it's out of
+    // range or now invalid.
+    const int numDrills = static_cast<int>(m_drillSet.drills.size());
+    int row = 0;
+    if (m_drillSet.selectedIndex >= 0 && m_drillSet.selectedIndex < numDrills)
+    {
+        bool invalid = false, measureCulprit = false;
+        ComputeDrillValidity(m_drillSet.drills[m_drillSet.selectedIndex], invalid, measureCulprit);
+        if (!invalid)
+            row = m_drillSet.selectedIndex;
+    }
+    SetCurrentSetting(row * kDrillGroupSize + static_cast<int>(DrillColumn::Select));
 }
 
 void PracticeModeSettingsDialog::m_SaveDrillsIfDirty()
 {
     if (m_drillsDirty)
     {
-        m_drillSet.Save();
+        // Incomplete drills (IsDrillIncomplete) don't reach disk until both measures
+        // are filled in - filtered out of the written copy only, m_drillSet.drills
+        // itself is untouched.
+        DrillSet toSave = m_drillSet;
+        toSave.drills.clear();
+        for (const Drill& d : m_drillSet.drills)
+        {
+            if (!IsDrillIncomplete(d))
+                toSave.drills.Add(d);
+        }
+        toSave.Save();
         m_drillsDirty = false;
     }
 }
@@ -81,34 +284,33 @@ void PracticeModeSettingsDialog::m_AdvanceSelection(int steps)
         return;
     }
 
-    const size_t total = GetTabSettingsCount(kDrillsTabIndex);
-    if (total == 0)
-        return;
+    m_pendingDeleteIndex = -1; // any navigation disarms a pending Delete confirm
 
-    // Row 0..numDrills-1 are drills; row numDrills is the trailing "Add drill" button,
-    // which only counts as a selectable row while it's actually enabled (an in/out
-    // range is set) - otherwise Up/Down skips over it entirely rather than landing on
-    // an inert, greyed-out stop.
-    const int numDrills = static_cast<int>((total - 1) / kDrillGroupSize);
+    // After the drill rows: Create New Drill (always selectable), then
+    // Set-current-in/out (only selectable with a range set - otherwise Up/Down
+    // skips it rather than landing on an inert, greyed-out stop).
+    const int numDrills = static_cast<int>(m_drillSet.drills.size());
     const bool addRowSelectable = m_range.begin != m_range.end; // see m_CreateDrillsTab's addDrillButton
-    const int totalRows = numDrills + (addRowSelectable ? 1 : 0);
-
-    if (totalRows == 0)
-    {
-        // No drills, and the Add-drill row isn't selectable either - nothing to do.
-        SetCurrentSetting(static_cast<int>(total) - 1);
-        return;
-    }
+    const int totalRows = numDrills + 1 + (addRowSelectable ? 1 : 0);
 
     const int cur = GetCurrentSetting();
-    const bool onAddRow = static_cast<size_t>(cur) >= total - 1;
-    const int curRow = onAddRow ? numDrills : cur / kDrillGroupSize;
+    const int createRowIdx = numDrills * kDrillGroupSize;
+    const int addRowIdx = createRowIdx + 1;
+
+    int curRow;
+    if (cur == createRowIdx) curRow = numDrills;
+    else if (cur == addRowIdx) curRow = numDrills + 1;
+    else curRow = cur / kDrillGroupSize;
 
     const int newRow = ((curRow + steps) % totalRows + totalRows) % totalRows;
-    // Always land on Select (column 0) when moving to a different drill - "the
-    // whole row" - rather than preserving whatever field you were on, so Enter
-    // right after Up/Down predictably loads the drill (see m_CreateDrillsTab).
-    const int newIdx = (newRow == numDrills) ? static_cast<int>(total) - 1 : newRow * kDrillGroupSize;
+    int newIdx;
+    if (newRow == numDrills) newIdx = createRowIdx;
+    else if (newRow == numDrills + 1) newIdx = addRowIdx;
+    else
+    {
+        newIdx = newRow * kDrillGroupSize; // always lands on Select, not whatever column you left
+        m_RememberSelectedDrill(newRow);
+    }
 
     m_SaveDrillsIfDirty();
     SetCurrentSetting(newIdx);
@@ -122,32 +324,28 @@ void PracticeModeSettingsDialog::m_NavigateColumn(int steps)
         return;
     }
 
-    const size_t total = GetTabSettingsCount(kDrillsTabIndex);
-    const int numDrills = total > 0 ? static_cast<int>((total - 1) / kDrillGroupSize) : 0;
-    const int cur = GetCurrentSetting();
-    const bool onAddRow = total == 0 || static_cast<size_t>(cur) >= total - 1;
+    m_pendingDeleteIndex = -1; // any navigation disarms a pending Delete confirm
 
-    if (onAddRow || numDrills == 0)
-        return; // nothing to navigate between on the trailing "Add drill" row
+    const int numDrills = static_cast<int>(m_drillSet.drills.size());
+    const int cur = GetCurrentSetting();
+    const bool onTrailingRow = numDrills == 0 || cur >= numDrills * kDrillGroupSize;
+
+    if (onTrailingRow)
+        return; // nothing to navigate between on Create New Drill / Set current in-out
 
     const int base = (cur / kDrillGroupSize) * kDrillGroupSize;
     const int col = cur % kDrillGroupSize;
 
-    // Left/Right only ever cycles among the sub-fields (Rename, In-Measure,
-    // In-Beat, Out-Measure, Out-Beat, Delete - cols 1-6), never back onto
-    // Select (col 0). Select is "the row selector" that Enter loads the drill
-    // from, and it's only reachable via Up/Down (see m_AdvanceSelection, which
-    // always lands on col 0) - so Enter can never load a drill as a side
-    // effect of cycling past the last/first sub-field with Left/Right.
+    // Left/Right cycles the sub-fields (cols 1-6) only, never back onto Select
+    // (col 0) - Select only loads a drill via Up/Down, so Enter can't load one
+    // as a side effect of cycling past the first/last sub-field.
     constexpr int kSubFieldCount = kDrillGroupSize - 1;
     int newCol;
     if (col == 0)
     {
         const int dir = steps > 0 ? 1 : -1;
         const int remaining = steps - dir; // first step just leaves Select
-        // Right from Select lands on In-Measure (subCol 1), not Rename (subCol
-        // 0) - Rename is still reachable by going one further left from there.
-        const int startSubCol = (dir > 0) ? 1 : (kSubFieldCount - 1);
+        const int startSubCol = (dir > 0) ? 1 : (kSubFieldCount - 1); // right lands on In-Measure, not Rename
         const int newSubCol = ((startSubCol + remaining) % kSubFieldCount + kSubFieldCount) % kSubFieldCount;
         newCol = newSubCol + 1;
     }
@@ -207,14 +405,10 @@ PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateMainSettingT
     return mainSettingTab;
 }
 
-// Note: rows below index by drill position (`i`) rather than binding directly to a
-// `Drill&` reference into m_drillSet.drills, and every access re-checks `i <
-// m_drillSet.drills.size()`. Add/Delete mutate the vector (push_back/erase) inside a
-// setter and then call ResetTabs(), but ResetTabs() only takes effect at the top of the
-// *next* Tick() (BaseGameSettingsDialog::Tick) - Render() still runs once more this frame
-// against the old (unrebuilt) tab, invoking every row's getter (BaseGameSettingsDialog::
-// m_SetTables -> TabData::SetLua, called for every tab, every frame). A raw reference or
-// an unguarded index would dangle/overrun during that one-frame window.
+// Rows below capture drill position (`i`), not a `Drill&`, and re-check `i <
+// m_drillSet.drills.size()` every access: ResetTabs() (from Add/Delete) only
+// rebuilds next Tick(), so this frame's Render() still runs every getter
+// against the old tab first - a raw reference would dangle in that window.
 PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateDrillsTab()
 {
     Tab drillsTab = std::make_unique<TabData>();
@@ -225,16 +419,11 @@ PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateDrillsTab()
         const Drill& d = m_drillSet.drills[i];
 
         {
-            // Label and invalid-state are getter-driven (not baked in at
-            // construction) so they stay live without needing a full ResetTabs.
             Setting s = CreateButton("", [this, i](const auto&) {
                 if (i >= m_drillSet.drills.size()) return;
                 const Drill drill = m_drillSet.drills[i];
-                // Set the out point first so the in point is what's seeked to last -
-                // m_SetStartTime/m_SetEndTime each seek the playhead to the time they're
-                // given (via onSetMapTime), so whichever runs last decides where practice
-                // playback ends up. Both also update m_range/m_startMeasure/m_endMeasure,
-                // which the Loop Points tab reads live, so this naturally shows there too.
+                if (IsDrillIncomplete(drill)) return;
+                // Out first, in last - both seek the playhead, so whichever runs last wins.
                 m_SetEndTime(m_MeasureBeatToTime(drill.outMeasure, drill.outBeat), drill.outMeasure);
                 m_SetStartTime(m_MeasureBeatToTime(drill.inMeasure, drill.inBeat), drill.inMeasure);
             });
@@ -246,19 +435,15 @@ PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateDrillsTab()
                     : Utility::Sprintf("%s: %d:%d -> %d:%d", d.name.c_str(), d.inMeasure, d.inBeat, d.outMeasure, d.outBeat);
                 bool invalid = false, measureCulprit = false;
                 ComputeDrillValidity(d, invalid, measureCulprit);
-                // An invalid drill can't be selected to load - see m_PressSetting.
-                data.invalid = invalid;
+                data.invalid = invalid && !IsDrillIncomplete(d); // invalid blocks Select (m_PressSetting)
+                data.trackingId = d.uiId;
             });
             drillsTab->settings.emplace_back(std::move(s));
         }
 
         {
-            // A drill with no custom name shows/edits as its placeholder ("Drill N")
-            // rather than an empty string, so Enter-to-edit starts with real,
-            // backspace-able text instead of nothing to delete. If the committed
-            // text is unchanged from that placeholder, store an empty name so the
-            // drill keeps auto-renumbering (e.g. if drills above it are deleted)
-            // instead of freezing to a literal "Drill N" from whenever this was edited.
+            // Unnamed drills edit as "Drill N" (real text) but commit back to ""
+            // if left unchanged, so they keep auto-renumbering.
             auto placeholderName = [i]() { return Utility::Sprintf("Drill %d", (int)i + 1); };
 
             Setting s = std::make_unique<SettingData>("- Name", SettingType::String);
@@ -266,11 +451,13 @@ PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateDrillsTab()
             s->stringSetting.maxLength = 20;
             s->getter.AddLambda([this, i, placeholderName](SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
-                const String& name = m_drillSet.drills[i].name;
-                data.stringSetting.val = name.empty() ? placeholderName() : name;
+                const Drill& d = m_drillSet.drills[i];
+                data.stringSetting.val = d.name.empty() ? placeholderName() : d.name;
+                data.trackingId = d.uiId;
             });
             s->setter.AddLambda([this, i, placeholderName](const SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
+                m_PushUndo();
                 m_drillSet.drills[i].name = (data.stringSetting.val == placeholderName()) ? "" : data.stringSetting.val;
                 m_drillsDirty = true;
                 ResetTabs(); // the Select row's label above embeds the name
@@ -278,130 +465,139 @@ PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateDrillsTab()
             drillsTab->settings.emplace_back(std::move(s));
         }
         {
-            Setting s = std::make_unique<SettingData>("- In measure no.", SettingType::Integer);
+            Setting s = std::make_unique<SettingData>("- Start measure no.", SettingType::Integer);
             s->intSetting.min = 1;
             s->intSetting.max = m_TimeToMeasure(m_endTime);
             s->intSetting.val = d.inMeasure;
             s->getter.AddLambda([this, i](SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
-                const Drill& d = m_drillSet.drills[i];
-                data.intSetting.val = d.inMeasure;
-                bool invalid = false, measureCulprit = false;
-                ComputeDrillValidity(d, invalid, measureCulprit);
-                data.invalid = invalid && measureCulprit;
+                FillNumericCellData(data, m_drillSet.drills[i], m_drillSet.drills[i].inMeasure, DrillField::Measure);
             });
             s->setter.AddLambda([this, i](const SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
+                m_PushUndo();
+                const int followId = m_drillSet.drills[i].uiId;
                 m_drillSet.drills[i].inMeasure = data.intSetting.val;
                 m_drillsDirty = true;
-                ResetTabs(); // beat's valid max depends on this measure's numerator
+                m_SortDrillsAndFollow(followId, DrillColumn::InMeasure); // keeps ascending start-point order
             });
             drillsTab->settings.emplace_back(std::move(s));
         }
         {
-            Setting s = std::make_unique<SettingData>("- In beat", SettingType::Integer);
+            Setting s = std::make_unique<SettingData>("- Start beat", SettingType::Integer);
             s->intSetting.min = 1;
             s->intSetting.max = m_NumeratorAtMeasure(d.inMeasure);
             s->intSetting.val = d.inBeat;
             s->getter.AddLambda([this, i](SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
                 const Drill& d = m_drillSet.drills[i];
-                data.intSetting.val = d.inBeat;
-                bool invalid = false, measureCulprit = false;
-                ComputeDrillValidity(d, invalid, measureCulprit);
-                data.invalid = invalid && !measureCulprit;
+                data.intSetting.max = m_NumeratorAtMeasure(d.inMeasure); // live, not baked at construction
+                FillNumericCellData(data, d, d.inBeat, DrillField::Beat);
             });
             s->setter.AddLambda([this, i](const SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
+                m_PushUndo();
+                const int followId = m_drillSet.drills[i].uiId;
                 m_drillSet.drills[i].inBeat = data.intSetting.val;
                 m_drillsDirty = true;
+                m_SortDrillsAndFollow(followId, DrillColumn::InBeat); // same-measure drills tie-break on this
             });
             drillsTab->settings.emplace_back(std::move(s));
         }
         {
-            Setting s = std::make_unique<SettingData>("- Out measure no.", SettingType::Integer);
+            Setting s = std::make_unique<SettingData>("- End measure no.", SettingType::Integer);
             s->intSetting.min = 1;
             s->intSetting.max = m_TimeToMeasure(m_endTime);
             s->intSetting.val = d.outMeasure;
             s->getter.AddLambda([this, i](SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
-                const Drill& d = m_drillSet.drills[i];
-                data.intSetting.val = d.outMeasure;
-                bool invalid = false, measureCulprit = false;
-                ComputeDrillValidity(d, invalid, measureCulprit);
-                data.invalid = invalid && measureCulprit;
+                FillNumericCellData(data, m_drillSet.drills[i], m_drillSet.drills[i].outMeasure, DrillField::Measure);
             });
             s->setter.AddLambda([this, i](const SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
+                m_PushUndo();
                 m_drillSet.drills[i].outMeasure = data.intSetting.val;
                 m_drillsDirty = true;
-                ResetTabs();
             });
             drillsTab->settings.emplace_back(std::move(s));
         }
         {
-            Setting s = std::make_unique<SettingData>("- Out beat", SettingType::Integer);
+            Setting s = std::make_unique<SettingData>("- End beat", SettingType::Integer);
             s->intSetting.min = 1;
             s->intSetting.max = m_NumeratorAtMeasure(d.outMeasure);
             s->intSetting.val = d.outBeat;
             s->getter.AddLambda([this, i](SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
                 const Drill& d = m_drillSet.drills[i];
-                data.intSetting.val = d.outBeat;
-                bool invalid = false, measureCulprit = false;
-                ComputeDrillValidity(d, invalid, measureCulprit);
-                data.invalid = invalid && !measureCulprit;
+                data.intSetting.max = m_NumeratorAtMeasure(d.outMeasure); // see In-Beat getter above
+                FillNumericCellData(data, d, d.outBeat, DrillField::Beat);
             });
             s->setter.AddLambda([this, i](const SettingData& data) {
                 if (i >= m_drillSet.drills.size()) return;
+                m_PushUndo();
                 m_drillSet.drills[i].outBeat = data.intSetting.val;
                 m_drillsDirty = true;
             });
             drillsTab->settings.emplace_back(std::move(s));
         }
 
-        drillsTab->settings.emplace_back(CreateButton("- Delete this drill", [this, i](const auto&) {
-            if (i >= m_drillSet.drills.size()) return;
-            m_drillSet.drills.erase(m_drillSet.drills.begin() + i);
-            m_drillsDirty = true;
-            ResetTabs();
-        }));
+        {
+            Setting s = std::make_unique<SettingData>("- Delete this drill", SettingType::Button);
+            s->setter.AddLambda([this, i](const SettingData&) { m_RequestDeleteDrill(i); });
+            s->getter.AddLambda([this, i](SettingData& data) {
+                data.armed = (m_pendingDeleteIndex == static_cast<int>(i));
+            });
+            drillsTab->settings.emplace_back(std::move(s));
+        }
     }
 
-    Setting addDrillButton = CreateButton("Set current in and out as a new drill", [this](const auto&) {
-        if (m_range.begin == m_range.end)
-            return; // no in/out set - button is shown disabled, ignore stray presses
-
-        // Don't rely on HasEnd() (begin < end) here: "Set start"/"Set end" (and the
-        // measure fields) can legitimately be pressed in either order - e.g. setting
-        // start after already setting a later end - which HasEnd() would read as
-        // "unset". Any two distinct points are a valid drill; order them ourselves.
+    // Blank drill reachable without an in/out range already set - measures
+    // blank (IsDrillIncomplete), beats default to a real 1.
+    Setting createDrillButton = CreateButton("Create new drill", [this](const auto&) {
+        m_PushUndo();
         Drill d;
+        d.uiId = m_AllocDrillId();
+        d.inMeasure = 0;
+        d.inBeat = 1;
+        d.outMeasure = 0;
+        d.outBeat = 1;
+        m_drillSet.drills.Add(d);
+        m_drillsDirty = true;
+        m_SortDrillsAndFollow(d.uiId, DrillColumn::InMeasure); // land the cursor ready to type it in
+    });
+    drillsTab->settings.emplace_back(std::move(createDrillButton));
+
+    Setting addDrillButton = CreateButton("Set current in and out as a new drill", [this](const auto&) {
+        m_PushUndo();
+
+        // Not HasEnd() (begin < end) - start/end can legitimately be set in either
+        // order, so order the two points ourselves instead.
+        Drill d;
+        d.uiId = m_AllocDrillId();
         m_TimeToMeasureBeat(Math::Min(m_range.begin, m_range.end), d.inMeasure, d.inBeat);
         m_TimeToMeasureBeat(Math::Max(m_range.begin, m_range.end), d.outMeasure, d.outBeat);
         m_drillSet.drills.Add(d);
         m_drillsDirty = true;
-        ResetTabs();
+        m_SortDrillsAndFollow(d.uiId, DrillColumn::Select);
     });
-    // The button's own label doubles as the enabled/disabled signal for the skin
-    // renderer, refreshed live every frame (buttons have no value to bind a
-    // getter to otherwise, but the name field works the same way).
     addDrillButton->getter.AddLambda([this](SettingData& data) {
-        data.name = (m_range.begin != m_range.end)
+        const bool hasRange = m_range.begin != m_range.end;
+        data.name = hasRange
             ? "Set current in and out as a new drill"
             : "Set an In and Out position to save as a drill";
+        data.invalid = !hasRange; // disabled - skins grey it out via this, not a name string match
     });
     drillsTab->settings.emplace_back(std::move(addDrillButton));
 
     return drillsTab;
 }
 
-void PracticeModeSettingsDialog::m_SetStartTime(MapTime time, int measure)
+void PracticeModeSettingsDialog::m_SetStartTime(MapTime time, int measure, bool seek)
 {
     m_range.begin = time;
     m_startMeasure = measure >= 0 ? measure : m_TimeToMeasure(time);
     m_setStartButton->name = Utility::Sprintf("Set the start point (%dms) to here", time);
-    onSetMapTime.Call(time);
+    if (seek) onSetMapTime.Call(time);
     if (m_range.end < time)
     {
         m_range.end = time;
@@ -409,13 +605,13 @@ void PracticeModeSettingsDialog::m_SetStartTime(MapTime time, int measure)
     }
 }
 
-void PracticeModeSettingsDialog::m_SetEndTime(MapTime time, int measure)
+void PracticeModeSettingsDialog::m_SetEndTime(MapTime time, int measure, bool seek)
 {
     m_range.end = time;
     m_endMeasure = measure >= 0 ? measure : m_TimeToMeasure(time);
     m_setEndButton->name = Utility::Sprintf("Set the end point (%dms) to here", time);
 
-    if(time != 0) onSetMapTime.Call(time);
+    if(seek && time != 0) onSetMapTime.Call(time);
 }
 
 
@@ -426,7 +622,7 @@ PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateLoopingTab()
 
     // Loop begin
     {
-        m_SetStartTime(m_range.begin);
+        m_SetStartTime(m_range.begin, -1, false); // sync display state only - see header comment
 
         Setting loopBeginButton = CreateButton("Set the start point to here", [this](const auto&) {
             m_SetStartTime(Math::Clamp(m_lastMapTime, 0, m_endTime));
@@ -453,7 +649,7 @@ PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateLoopingTab()
 
     // Loop end
     {
-        m_SetEndTime(m_range.end);
+        m_SetEndTime(m_range.end, -1, false); // sync display state only - see header comment
 
         Setting loopEndButton = CreateButton("Set the end point to here", [this](const auto&) {
             m_SetEndTime(m_lastMapTime);

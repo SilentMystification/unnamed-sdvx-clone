@@ -28,12 +28,16 @@ public:
         Delegate<SettingData&> getter;
         // Called when the setting is updated
         Delegate<const SettingData&> setter;
-        // Optional, set by the getter alongside the value: marks this row as
-        // currently holding an invalid value/state. Purely a display hint for the
-        // skin (e.g. render red, swap a button's label) - never blocks editing or
-        // committing. For a Button row, also blocks Enter/Select from pressing it
-        // (see m_PressSetting).
+        // Optional, set by the getter: row holds an invalid value. Display hint
+        // (e.g. render red) that also blocks Enter/Select on a Button row (see m_PressSetting).
         bool invalid = false;
+        // Optional, set by the getter: row needs a second confirming action before
+        // its effect happens (e.g. Delete deletes on the 2nd press). Display hint only.
+        bool armed = false;
+        // Optional, set by the getter: stable per-row identity for the skin to key
+        // animation/change-tracking state by, when array position isn't reliable
+        // (e.g. Drills tab rows, which resort). 0 = not needed.
+        int trackingId = 0;
 
         struct
         {
@@ -108,6 +112,9 @@ public:
 protected:
     virtual void InitTabs() = 0;
     virtual void OnAdvanceTab() {};
+    virtual void OnDeleteKeyPressed() {}; // Del, not Backspace (which only edits text)
+    virtual void OnUndoPressed() {};
+    virtual void OnRedoPressed() {};
 
     [[nodiscard]]
     Setting CreateBoolSetting(GameConfigKeys key, String name);

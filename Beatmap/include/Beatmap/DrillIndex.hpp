@@ -12,6 +12,10 @@ struct Drill
 	int inBeat = 1;
 	int outMeasure = 1;
 	int outBeat = 1;
+
+	// UI-only bookkeeping (PracticeModeSettingsDialog): a stable identity for
+	// tracking a drill across a re-sort or undo/redo. Never (de)serialized.
+	int uiId = 0;
 };
 
 // A chart's list of saved drills, backed by a JSON file on disk so it can be
@@ -21,6 +25,9 @@ struct DrillSet
 	String path;
 	String chartHash;
 	Vector<Drill> drills;
+	// Index into `drills` of the last-selected one, so reopening can restore it.
+	// -1 = none remembered.
+	int selectedIndex = -1;
 
 	// Loads the DrillSet belonging to the chart at chartPath/chartHash.
 	// Returns an empty DrillSet (ready to be populated and Save()d) if none is found.

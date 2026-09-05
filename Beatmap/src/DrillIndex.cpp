@@ -62,6 +62,7 @@ bool DrillSet::FromJson(const nlohmann::json& j, const String& chartHash, DrillS
 		d.outBeat = std::max(1, dj.value("out_beat", 1));
 		out.drills.Add(d);
 	}
+	out.selectedIndex = j.value("selected_index", -1);
 	return true;
 }
 
@@ -81,6 +82,7 @@ nlohmann::json DrillSet::ToJson() const
 		dj["out_beat"] = d.outBeat;
 		j["drills"].push_back(dj);
 	}
+	j["selected_index"] = selectedIndex;
 	return j;
 }
 

@@ -146,11 +146,8 @@ bool BaseGameSettingsDialog::Init()
     g_input.OnButtonReleased.Add(this, &BaseGameSettingsDialog::m_OnButtonReleased);
     g_gameWindow->OnKeyPressed.Add(this, &BaseGameSettingsDialog::m_OnKeyPressed);
 
-    // Text input stays on for the dialog's whole lifetime (not just while a value
-    // is being edited) so that typing on a selected-but-not-yet-editing Integer/
-    // String row can be caught as the trigger to start an (Excel-style, overwrite)
-    // edit - see m_OnEditTextInput. It doesn't interfere with button/knob input,
-    // which reads raw key/controller state independently of text input mode.
+    // Stays on for the dialog's whole lifetime so typing on a selected row starts
+    // an Excel-style overwrite edit even before Enter - see m_OnEditTextInput.
     SDL_StartTextInput();
     g_gameWindow->OnTextInput.Add(this, &BaseGameSettingsDialog::m_OnEditTextInput);
     g_gameWindow->OnKeyRepeat.Add(this, &BaseGameSettingsDialog::m_OnEditKeyRepeat);
@@ -500,9 +497,7 @@ void BaseGameSettingsDialog::m_OnEnterPressed()
 
     auto currentSetting = m_tabs[m_currentTab]->settings.at(m_currentSetting).get();
 
-    // Typing only makes sense with a keyboard - a controller-only player has no way
-    // to enter text or Escape back out, so leave Integer/String rows as a no-op for
-    // them (they can still step Integer values with Left/Right/knob/BT0-3 as before).
+    // Typing needs a keyboard - a controller-only player can't Escape back out.
     if (currentSetting->type == SettingType::Integer || currentSetting->type == SettingType::String)
     {
         if (g_gameConfig.GetEnum<Enum_InputDevice>(GameConfigKeys::ButtonInputDevice) == InputDevice::Keyboard)
@@ -577,13 +572,11 @@ void BaseGameSettingsDialog::m_OnEditTextInput(const String& text)
     if (!m_active || m_closing)
         return;
 
-    if (!m_editingSetting)
+    SettingData* targetSetting = m_editingSetting;
+    if (!targetSetting)
     {
-        // Not editing yet - typing on a selected Integer/String row is the
-        // Excel-style trigger to start editing it, overwriting whatever was
-        // there (as opposed to Enter, which preloads the current value to
-        // modify - see m_OnEnterPressed). Anything else (wrong row type, no
-        // keyboard) is ignored rather than starting an edit.
+        // Typing on a selected Integer/String row starts an overwrite edit (Enter
+        // instead preloads the current value - see m_OnEnterPressed).
         if (static_cast<size_t>(m_currentSetting) >= m_tabs[m_currentTab]->settings.size())
             return;
 
@@ -593,25 +586,43 @@ void BaseGameSettingsDialog::m_OnEditTextInput(const String& text)
         if (g_gameConfig.GetEnum<Enum_InputDevice>(GameConfigKeys::ButtonInputDevice) != InputDevice::Keyboard)
             return;
 
-        m_StartEditingValue(currentSetting, /*startEmpty=*/true);
+        targetSetting = currentSetting;
     }
 
-    const bool isString = m_editingSetting->type == SettingType::String;
-    const size_t maxLength = isString ? m_editingSetting->stringSetting.maxLength : 9;
+    const bool isString = targetSetting->type == SettingType::String;
+    const size_t maxLength = isString ? targetSetting->stringSetting.maxLength : 9;
 
+    // Filter first, then length-check the whole chunk - checking length per-byte
+    // could split a multi-byte UTF-8 character across the limit.
+    String filtered;
     for (char c : text)
     {
-        if (m_editBuffer.length() >= maxLength)
-            break;
-
-        if (isString ? (c >= 32 && c != 127) : (c >= '0' && c <= '9'))
-            m_editBuffer += c;
+        // char is signed here, so a UTF-8 continuation/lead byte (>= 0x80) reads as
+        // negative and fails "c >= 32" - compare unsigned so non-ASCII isn't dropped.
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (isString ? (uc >= 32 && uc != 127) : (c >= '0' && c <= '9'))
+            filtered += c;
     }
+
+    // e.g. a letter typed into a number field - leave it untouched rather than
+    // starting an edit with an empty buffer that would commit as 0.
+    if (filtered.empty())
+        return;
+
+    if (!m_editingSetting)
+        m_StartEditingValue(targetSetting, /*startEmpty=*/true);
+
+    if (m_editBuffer.length() + filtered.length() <= maxLength)
+        m_editBuffer += filtered;
 
     if (isString)
         m_editingSetting->stringSetting.val = m_editBuffer;
     else
-        m_editingSetting->intSetting.val = m_editBuffer.empty() ? 0 : atoi(*m_editBuffer);
+    {
+        // Empty buffer (e.g. backspaced to nothing) previews the field's min, not 0.
+        const int parsed = m_editBuffer.empty() ? m_editingSetting->intSetting.min : atoi(*m_editBuffer);
+        m_editingSetting->intSetting.val = Math::Clamp(parsed, m_editingSetting->intSetting.min, m_editingSetting->intSetting.max);
+    }
 }
 
 void BaseGameSettingsDialog::m_OnEditKeyRepeat(SDL_Scancode code)
@@ -667,6 +678,17 @@ void BaseGameSettingsDialog::m_OnKeyPressed(SDL_Scancode code, int32 delta)
     case SDL_SCANCODE_DOWN:
         m_AdvanceSelection(1);
         break;
+    case SDL_SCANCODE_DELETE:
+        OnDeleteKeyPressed();
+        break;
+    case SDL_SCANCODE_Z:
+        if ((g_gameWindow->GetModifierKeys() & ModifierKeys::Ctrl) == ModifierKeys::Ctrl)
+            OnUndoPressed();
+        break;
+    case SDL_SCANCODE_Y:
+        if ((g_gameWindow->GetModifierKeys() & ModifierKeys::Ctrl) == ModifierKeys::Ctrl)
+            OnRedoPressed();
+        break;
     default:
         break;
     }
@@ -689,6 +711,8 @@ void BaseGameSettingsDialog::TabData::SetLua(lua_State* lua, const SettingData* 
             const bool isEditing = setting.get() == editingSetting;
             pushBoolToTable(lua, "isEditing", isEditing);
             pushBoolToTable(lua, "invalid", setting->invalid);
+            pushBoolToTable(lua, "armed", setting->armed);
+            pushIntToTable(lua, "trackingId", setting->trackingId);
 
             // Also get settings values in case they've been changed elsewhere - except
             // the row currently being typed into, whose getter would otherwise

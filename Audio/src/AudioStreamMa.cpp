@@ -10,6 +10,12 @@
 #define STB_VORBIS_HEADER_ONLY
 #include "extras/stb_vorbis.c"	// Enables Vorbis decoding.
 
+// MA_NO_COREAUDIO (this project only uses miniaudio for its decoders, not device I/O -
+// see Audio/CMakeLists.txt for why) has to be defined project-wide rather than here:
+// AudioStreamMa.hpp's own plain `#include "miniaudio.h"` (declarations only) runs before
+// this file's implementation include, and miniaudio's platform-detection block is inside
+// the same header-guarded section both inclusions share - defining the macro only here
+// is too late for it once that block has already run once.
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 

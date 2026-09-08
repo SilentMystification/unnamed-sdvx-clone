@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "RenderQueue.hpp"
 #include "OpenGL.hpp"
+#include "RenderBackendHooks.hpp"
 using Utility::Cast;
 
 namespace Graphics
@@ -33,6 +34,21 @@ namespace Graphics
 	void RenderQueue::Process(bool clearQueue)
 	{
 		assert(m_ogl);
+
+#ifdef USC_GL1_LEGACY
+		// This never otherwise touches GL_CULL_FACE, so 3D content here draws with whatever
+		// cull state the last thing to touch it left behind - and nanovg_gl1.h's own
+		// non-convex path fill (gl1nvg__fill, used by essentially any HUD with a rounded or
+		// complex shape) intentionally leaves GL_CULL_FACE enabled with GL_BACK culling
+		// afterward, matching upstream nanovg_gl.h's behavior (see that file's own comment
+		// on the two-pass stencil technique). Any 3D mesh here whose winding order doesn't
+		// happen to survive back-face culling from the current camera angle gets silently
+		// discarded - draws successfully, produces zero visible pixels. Established, real
+		// track/lane geometry on this specific backend was never verified to be
+		// double-sided-safe, so the conservative fix is to not depend on inherited state at
+		// all: explicitly disable culling for this backend's 3D content draws.
+		glDisable(GL_CULL_FACE);
+#endif
 
 		bool scissorEnabled = false;
 		bool blendEnabled = false;
@@ -143,9 +159,7 @@ namespace Graphics
 				}
 
 				DrawOrRedrawMesh(sdc->mesh);
-				#ifdef EMBEDDED
-				glUseProgram(0);
-				#endif
+				RenderBackendHooks::UnbindProgramAfterDraw();
 			}
 			else if(Cast<PointDrawCall>(item))
 			{
@@ -166,15 +180,11 @@ namespace Graphics
 				}
 				else
 				{
-					#ifndef EMBEDDED
-					glPointSize(pdc->size);
-					#endif
+					RenderBackendHooks::SetPointSize(pdc->size);
 				}
-				
+
 				DrawOrRedrawMesh(pdc->mesh);
-				#ifdef EMBEDDED
-				glUseProgram(0);
-				#endif
+				RenderBackendHooks::UnbindProgramAfterDraw();
 			}
 		}
 
@@ -219,7 +229,7 @@ namespace Graphics
 		m_orderedCommands.push_back(sdc);
 	}
 
-	void RenderQueue::DrawScissored(Rect scissor, Transform worldTransform, Mesh m, Material mat, const MaterialParameterSet& params /*= MaterialParameterSet()*/)
+	void RenderQueue::DrawScissored(RectF scissor, Transform worldTransform, Mesh m, Material mat, const MaterialParameterSet& params /*= MaterialParameterSet()*/)
 	{
 		SimpleDrawCall* sdc = new SimpleDrawCall();
 		sdc->mat = mat;
@@ -229,7 +239,7 @@ namespace Graphics
 		sdc->scissorRect = scissor;
 		m_orderedCommands.push_back(sdc);
 	}
-	void RenderQueue::DrawScissored(Rect scissor, Transform worldTransform, Ref<class TextRes> text, Material mat, const MaterialParameterSet& params /*= MaterialParameterSet()*/)
+	void RenderQueue::DrawScissored(RectF scissor, Transform worldTransform, Ref<class TextRes> text, Material mat, const MaterialParameterSet& params /*= MaterialParameterSet()*/)
 	{
 		SimpleDrawCall* sdc = new SimpleDrawCall();
 		sdc->mat = mat;

@@ -128,6 +128,16 @@ namespace Graphics
 			{
 				pFace = &fallbackFont;
 				ci.glyphID = FT_Get_Char_Index(*pFace, t);
+				if(ci.glyphID == 0)
+				{
+					// Neither the skin's own font nor the embedded CJK fallback has this
+					// character at all - it'll render as a genuinely empty (zero-size) quad,
+					// not a rasterization failure. Real signal for "some text renders,
+					// other text doesn't" reports: if a title with this logged but its
+					// artist line doesn't, the title contains a character truly missing from
+					// both fonts, not a broader font-pipeline bug.
+					Logf("Font::AddCharInfo: no glyph for U+%04X in primary or fallback font", Logger::Severity::Warning, (uint32)t);
+				}
 			}
 			FT_Load_Glyph(*pFace, ci.glyphID, FT_LOAD_DEFAULT);
 

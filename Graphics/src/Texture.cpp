@@ -2,6 +2,7 @@
 #include "OpenGL.hpp"
 #include "Texture.hpp"
 #include "Image.hpp"
+#include "RenderBackendHooks.hpp"
 #include <Graphics/ResourceManagers.hpp>
 
 
@@ -28,12 +29,15 @@ namespace Graphics
 		}
 		~Texture_Impl()
 		{
+			// GLuint is `unsigned long` on this target's classic GL headers, not
+			// `unsigned int` like m_texture (uint32) - same size, different type name;
+			// C++'s pointer-type strictness needs the cast even though C didn't.
 			if(m_texture)
-				glDeleteTextures(1, &m_texture);
+				glDeleteTextures(1, (GLuint*)&m_texture);
 		}
 		bool Init()
 		{
-			glGenTextures(1, &m_texture);
+			glGenTextures(1, (GLuint*)&m_texture);
 			if(m_texture == 0)
 				return false;
 			return true;
@@ -48,11 +52,7 @@ namespace Graphics
 			uint32 type = -1;
 			if(format == TextureFormat::D32)
 			{
-				#ifdef EMBEDDED
-				ifmt = GL_DEPTH_COMPONENT16;
-				#else
-				ifmt = GL_DEPTH_COMPONENT32;
-				#endif
+				ifmt = RenderBackendHooks::DepthTextureInternalFormat();
 				fmt = GL_DEPTH_COMPONENT;
 				type = GL_FLOAT;
 			}
@@ -76,7 +76,7 @@ namespace Graphics
 		}
 		void SetFromFrameBuffer(Vector2i pos = { 0, 0 }) override
 		{
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+			RenderBackendHooks::BindDefaultReadFramebuffer();
 			glReadBuffer(GL_BACK);
 			glBindTexture(GL_TEXTURE_2D, m_texture);
 			glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pos.x, pos.y, m_size.x, m_size.y);
@@ -111,12 +111,7 @@ namespace Graphics
 					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, m_filter ? GL_LINEAR : GL_NEAREST);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, m_filter ? GL_LINEAR : GL_NEAREST);
 			}
-			#ifndef EMBEDDED
-			if(GL_TEXTURE_MAX_ANISOTROPY_EXT)
-			{
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, m_anisotropic);
-			}
-			#endif
+			RenderBackendHooks::ApplyAnisotropicFiltering(m_anisotropic);
 			glBindTexture(GL_TEXTURE_2D, 0);
 		}
 		void SetFilter(bool enabled, bool mipFiltering, float anisotropic) override
@@ -129,13 +124,22 @@ namespace Graphics
 		}
 		void SetMipmaps(bool enabled) override
 		{
-			if(enabled)
+			if(enabled && RenderBackendHooks::SupportsMipmapGeneration())
 			{
 				glBindTexture(GL_TEXTURE_2D, m_texture);
-				glGenerateMipmap(GL_TEXTURE_2D);
+				RenderBackendHooks::GenerateMipmap();
 				glBindTexture(GL_TEXTURE_2D, 0);
+				m_mipmaps = true;
 			}
-			m_mipmaps = enabled;
+			else
+			{
+				// GL1_LEGACY: glGenerateMipmap needs ARB_framebuffer_object, not
+				// guaranteed on G4-era GPUs (definitely absent on Rage128). Skipping
+				// mipmaps there means more aliasing on minified textures at a distance -
+				// an accepted fidelity loss, not a crash risk from re-deriving mip levels
+				// off a possibly-stale source pointer. See Material_GL1_LEGACY.cpp/plan file.
+				m_mipmaps = false;
+			}
 			UpdateFilterState();
 		}
 		const Vector2i& GetSize() const override

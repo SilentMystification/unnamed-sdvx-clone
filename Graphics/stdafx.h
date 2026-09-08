@@ -2,7 +2,7 @@
 #pragma once
 
 // OpenGL headers
-#include "GL.hpp"
+#include <Graphics/GL.hpp>
 
 #ifdef _WIN32
 // Windows Header File

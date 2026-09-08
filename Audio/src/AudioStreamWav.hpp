@@ -35,6 +35,16 @@ private:
 	uint64 m_dataPosition = 0;
 	uint32 m_decode_ms_adpcm(const Buffer &encoded, Buffer *decoded, uint64 pos);
 
+	// WAV is a fixed little-endian format (RIFF spec) regardless of host - these are
+	// no-ops on a little-endian host and byte-swap in place on a big-endian one (PPC).
+	// Without this, every multi-byte header field (chunk length, sample rate, etc.) and
+	// every 16-bit PCM sample comes out wrong on PPC - chunk length in particular getting
+	// byte-swapped into a huge garbage value feeds straight into a Buffer::resize() call
+	// below, which is a near-guaranteed crash on any WAV load, not just wrong audio.
+	static void m_swapHeader(WavHeader& h);
+	static void m_swapFormat(WavFormat& f);
+	static void m_swapPcm16(void* data, size_t byteLen);
+
 protected:
 	bool Init(Audio *audio, const String &path, bool preload) override;
 	int32 GetStreamPosition_Internal() override;

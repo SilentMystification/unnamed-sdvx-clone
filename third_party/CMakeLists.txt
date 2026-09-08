@@ -3,7 +3,18 @@ add_subdirectory(lua-5.3.5)
 
 #cpr test programs
 option(CPR_BUILD_TESTS "Set to ON to build cpr tests." OFF)
-set(CPR_ENABLE_SSL ON)
+if(USC_RENDER_BACKEND STREQUAL "GL1_LEGACY")
+    # curl's Secure Transport backend hard-requires Leopard (10.5+) at compile time
+    # (its own sectransp.c: "#error requires Leopard or later") - a real wall on our 10.4
+    # target, not a missing header to work around. No PPC/10.4 build of OpenSSL/mbedTLS
+    # exists either (same class of gap as Freetype/libpng/etc - see
+    # humming-sleeping-stonebraker.md). HTTP-only networking (song downloads, update
+    # checks, multiplayer) is an accepted degradation here, same as Discord RPC/gamepad/
+    # IME elsewhere in this port - not chasing a TLS cross-build for it.
+    set(CPR_ENABLE_SSL OFF)
+else()
+    set(CPR_ENABLE_SSL ON)
+endif()
 #TODO: Don't have two curl builds in the game build
 #if(MSVC)
 #    set(CPR_FORCE_USE_SYSTEM_CURL ON) #curl should be available through vcpkg
@@ -16,10 +27,12 @@ else()
 endif(USE_SYSTEM_CPR)
 
 #discord example program
-set(CLANG_FORMAT_SUFFIX "ignore") #try to disable clang formatter
-option(BUILD_EXAMPLES "Build example apps" OFF)
-add_subdirectory(discord-rpc)
-target_include_directories(discord-rpc PUBLIC discord-rpc/include)
+if(USC_ENABLE_DISCORD_RPC)
+    set(CLANG_FORMAT_SUFFIX "ignore") #try to disable clang formatter
+    option(BUILD_EXAMPLES "Build example apps" OFF)
+    add_subdirectory(discord-rpc)
+    target_include_directories(discord-rpc PUBLIC discord-rpc/include)
+endif()
 
 #nanovg
 add_library(nanovg nanovg/src/nanovg.c)
@@ -43,6 +56,13 @@ add_library(sqlite3
     sqlite3/sqlite3ext.h
 )
 target_include_directories(sqlite3 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sqlite3)
+if(APPLE)
+    # sqlite3.c's own comment documents this exact case: "Some older macs lack support
+    # for the zone [allocator]" - OSAtomicCompareAndSwapPtrBarrier (used by that path)
+    # was only added in the 10.5 SDK, absent on our 10.4 target. Harmless to set on any
+    # Apple build; it's a memory-allocator micro-optimization, not a functional feature.
+    target_compile_definitions(sqlite3 PRIVATE SQLITE_WITHOUT_ZONEMALLOC)
+endif()
 
 #rapidjson -- add as interface library to prevent building it
 add_library(rapidjson INTERFACE)

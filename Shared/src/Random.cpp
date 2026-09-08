@@ -3,7 +3,7 @@
 #include <random>
 #include <ctime>
 
-namespace Random
+namespace RandomUtil
 {
 	using std::mt19937;
 	using std::uniform_int_distribution;

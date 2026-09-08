@@ -97,7 +97,10 @@ namespace Graphics
 				return true;
 			}
 			
-			// If we get here, the loading of the jpeg failed
+			// If we get here, the loading of the jpeg failed - jpegFormatMessage/etc are
+			// no-op stubs above, so there's no real error text available here, only that
+			// it failed.
+			Log("LoadJPEG: decode failed (longjmp error path)", Logger::Severity::Warning);
 			return false;
 		}
 		bool LoadPNG(ImageRes* pImage, Buffer& in)
@@ -107,20 +110,33 @@ namespace Graphics
 			image.version = PNG_IMAGE_VERSION;
 
 			if(png_image_begin_read_from_memory(&image, in.data(), in.size()) == 0)
+			{
+				Logf("LoadPNG: png_image_begin_read_from_memory failed: %s", Logger::Severity::Warning, image.message);
 				return false;
+			}
 
 			image.format = PNG_FORMAT_RGBA;
 
 			pImage->SetSize(Vector2i(image.width, image.height));
 			Colori* pBuffer = pImage->GetBits();
 			if(!pBuffer)
+			{
+				Log("LoadPNG: ImageRes::GetBits() returned null after SetSize", Logger::Severity::Warning);
 				return false;
+			}
 
 			if((image.width * image.height * 4) != PNG_IMAGE_SIZE(image))
+			{
+				Logf("LoadPNG: size mismatch, %ux%u*4=%u vs PNG_IMAGE_SIZE=%u", Logger::Severity::Warning,
+					image.width, image.height, image.width * image.height * 4, (uint32)PNG_IMAGE_SIZE(image));
 				return false;
+			}
 
 			if(png_image_finish_read(&image, nullptr, pBuffer, 0, nullptr) == 0)
+			{
+				Logf("LoadPNG: png_image_finish_read failed: %s", Logger::Severity::Warning, image.message);
 				return false;
+			}
 
 			png_image_free(&image);
 			return true;
@@ -129,12 +145,18 @@ namespace Graphics
 		{
 			File f;
 			if(!f.OpenRead(fullPath))
+			{
+				Logf("ImageLoader::Load: failed to open \"%s\"", Logger::Severity::Warning, fullPath);
 				return false;
+			}
 
 			Buffer b(f.GetSize());
 			f.Read(b.data(), b.size());
 			if(b.size() < 4)
+			{
+				Logf("ImageLoader::Load: \"%s\" is too small to be a real image (%u bytes)", Logger::Severity::Warning, fullPath, (uint32)b.size());
 				return false;
+			}
 
 			return Load(pImage, b);
 		}

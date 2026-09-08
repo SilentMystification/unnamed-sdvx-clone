@@ -53,11 +53,18 @@ void Audio_Impl::Mix(void *data, uint32 &numSamples)
 				CheckMemoryGuard();
 #endif
 
-				// Mix into buffer and apply volume scaling
-				for (uint32 i = 0; i < m_sampleBufferLength; i++)
+				// Mix into buffer and apply volume scaling.
+				// Volume is hoisted into a local and the buffers accessed through
+				// restrict pointers so this is a plain per-sample FMA loop with no
+				// calls or aliasing in its body - lets the auto-vectorizer (see
+				// -maltivec in cmake/Toolchains/ppc-apple-darwin8.cmake) turn this into
+				// AltiVec SIMD on the G4 build instead of falling back to scalar.
+				const float volume = item->GetVolume();
+				float* __restrict__ dst = m_sampleBuffer.data();
+				const float* __restrict__ src = m_itemBuffer.data();
+				for (uint32 i = 0; i < m_sampleBufferLength * 2; i++)
 				{
-					m_sampleBuffer[i * 2 + 0] += m_itemBuffer[i * 2] * item->GetVolume();
-					m_sampleBuffer[i * 2 + 1] += m_itemBuffer[i * 2 + 1] * item->GetVolume();
+					dst[i] += src[i] * volume;
 				}
 			}
 
@@ -68,15 +75,17 @@ void Audio_Impl::Mix(void *data, uint32 &numSamples)
 			}
 			lock.unlock();
 
-			// Apply volume levels
-			for (uint32 i = 0; i < m_sampleBufferLength; i++)
+			// Apply volume levels and safety-clamp to [-1, 1] (helps protect speakers a
+			// bit in case of corruption - this will clip, but so will values outside
+			// [-1, 1] anyway). Same restrict-pointer/no-calls shape as the mix loop
+			// above, for the same auto-vectorization reason.
 			{
-				m_sampleBuffer[i * 2 + 0] *= globalVolume;
-				m_sampleBuffer[i * 2 + 1] *= globalVolume;
-				// Safety clamp to [-1, 1] that should help protect speakers a bit in case of corruption
-				// this will clip, but so will values outside [-1, 1] anyway
-				m_sampleBuffer[i * 2 + 0] = fmin(fmax(m_sampleBuffer[i * 2 + 0], -1.f), 1.f);
-				m_sampleBuffer[i * 2 + 1] = fmin(fmax(m_sampleBuffer[i * 2 + 1], -1.f), 1.f);
+				const float vol = globalVolume;
+				float* __restrict__ buf = m_sampleBuffer.data();
+				for (uint32 i = 0; i < m_sampleBufferLength * 2; i++)
+				{
+					buf[i] = fmin(fmax(buf[i] * vol, -1.f), 1.f);
+				}
 			}
 
 			// Set new remaining buffer data

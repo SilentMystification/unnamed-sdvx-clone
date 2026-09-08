@@ -7,7 +7,7 @@
 namespace Graphics
 {
 
-	using Shared::Rect;
+	using Shared::RectF;
 	/*
 		Represents a draw command that can be executed in a render queue
 	*/
@@ -30,7 +30,7 @@ namespace Graphics
 		// The world transform
 		Transform worldTransform; 
 		// Scissor rectangle
-		Rect scissorRect;
+		RectF scissorRect;
 	};
 
 	// Command for points/lines with size/width parameter
@@ -64,8 +64,8 @@ namespace Graphics
 		void Clear();
 		void Draw(Transform worldTransform, Mesh m, Material mat, const MaterialParameterSet& params = MaterialParameterSet());
 		void Draw(Transform worldTransform, Ref<class TextRes> text, Material mat, const MaterialParameterSet& params = MaterialParameterSet());
-		void DrawScissored(Rect scissor, Transform worldTransform, Mesh m, Material mat, const MaterialParameterSet& params = MaterialParameterSet());
-		void DrawScissored(Rect scissor, Transform worldTransform, Ref<class TextRes> text, Material mat, const MaterialParameterSet& params = MaterialParameterSet());
+		void DrawScissored(RectF scissor, Transform worldTransform, Mesh m, Material mat, const MaterialParameterSet& params = MaterialParameterSet());
+		void DrawScissored(RectF scissor, Transform worldTransform, Ref<class TextRes> text, Material mat, const MaterialParameterSet& params = MaterialParameterSet());
 
 		// Draw for lines/points with point size parameter
 		void DrawPoints(Mesh m, Material mat, const MaterialParameterSet& params, float pointSize);

@@ -68,3 +68,4 @@ Makefile
 docs/build
 docs/source/_build
 
+/build.linux-out

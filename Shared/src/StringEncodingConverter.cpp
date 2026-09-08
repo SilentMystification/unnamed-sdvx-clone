@@ -30,7 +30,14 @@ String StringEncodingConverter::ToUTF8(StringEncoding encoding, const char* str,
 	char* out_buf = out_buf_arr;
 	size_t out_buf_left = BUFFER_SIZE - 1;
 
+	// Apple's iconv() (any macOS/iOS SDK, not just the 10.4u one - confirmed against its
+	// iconv.h) declares inbuf as `const char**`, unlike glibc's non-const `char**` that
+	// the const_cast below assumes.
+#ifdef __APPLE__
+	while (iconv(conv_d, &in_buf, &in_buf_left, &out_buf, &out_buf_left) == -1)
+#else
 	while (iconv(conv_d, const_cast<char**>(&in_buf), &in_buf_left, &out_buf, &out_buf_left) == -1)
+#endif
 	{
 		// errno doesn't seem to be realible on Windows (set to 0 or 9 instead of E2BIG)
 		const int err = errno;

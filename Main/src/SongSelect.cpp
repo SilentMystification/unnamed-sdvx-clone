@@ -16,6 +16,9 @@
 #include "lua.hpp"
 #include <iterator>
 #include <mutex>
+#include <thread>
+#include <atomic>
+#include <memory>
 #include <MultiplayerScreen.hpp>
 #include <unordered_set>
 #include "SongSort.hpp"
@@ -948,6 +951,22 @@ private:
 	// Player of preview music
 	PreviewPlayer m_previewPlayer;
 
+	// Opening/seeking a preview stream (ov_open_callbacks/ov_pcm_seek) is real, possibly-slow
+	// file I/O. On fast local storage that's cheap enough to do inline every time the
+	// selection changes; on FAT32/USB storage on a single-core CPU it can run long enough to
+	// starve the realtime audio IO thread of CPU mid-load, heard as a burst of static from
+	// whatever preview is currently playing. Loading happens on a detached worker thread
+	// instead so the main loop - and the audio thread's scheduling slot - stay free while it
+	// happens; state is a separate heap object (not `this`) so it stays valid even if this
+	// screen is destroyed before a load finishes.
+	struct PreviewLoadState
+	{
+		std::atomic<bool> ready{false};
+		bool valid = false;
+		Ref<AudioStream> stream;
+	};
+	std::shared_ptr<PreviewLoadState> m_previewLoadState;
+
 	// Select sound
 	Sample m_selectSound;
 
@@ -1234,26 +1253,48 @@ public:
 
 		if (newPreview)
 		{
-			Ref<AudioStream> previewAudio = g_audio->CreateStream(audioPath);
-			if (previewAudio)
-			{
-				previewAudio->SetPosition(diff->preview_offset);
-
-				m_previewPlayer.FadeTo(previewAudio);
-
-				m_previewParams = params;
-			}
-			else
-			{
-				params = {"", 0, 0};
-
-				Logf("Failed to load preview audio from [%s]", Logger::Severity::Warning, audioPath);
-				if (m_previewParams != params)
-					m_previewPlayer.FadeTo(Ref<AudioStream>());
-			}
-
 			m_previewParams = params;
+
+			// See m_previewLoadState's declaration for why this is off-thread. Any load
+			// already in flight is simply abandoned here (its state object lives on via the
+			// thread's own shared_ptr capture and will discard itself when it finishes,
+			// since m_previewLoadState will no longer point at it).
+			auto state = std::make_shared<PreviewLoadState>();
+			m_previewLoadState = state;
+			uint32 previewOffset = diff->preview_offset;
+			Logf("Preview load: starting background load of [%s]", Logger::Severity::Warning, audioPath);
+			std::thread([state, audioPath, previewOffset]()
+			{
+				Timer loadTimer;
+				Ref<AudioStream> stream = g_audio->CreateStream(audioPath);
+				if (stream)
+					stream->SetPosition(previewOffset);
+				Logf("Preview load: [%s] finished in %d ms, valid=%d", Logger::Severity::Warning,
+					audioPath, (int)loadTimer.Milliseconds(), (int)(bool)stream);
+				state->stream = stream;
+				state->valid = (bool)stream;
+				state->ready.store(true);
+			}).detach();
 		}
+	}
+
+	// Applies the result of an in-flight background preview load (see m_previewLoadState)
+	// once it's ready. Must be called every frame from somewhere on the main thread.
+	void m_pollPreviewLoad()
+	{
+		if (!m_previewLoadState || !m_previewLoadState->ready.load())
+			return;
+
+		if (m_previewLoadState->valid)
+		{
+			m_previewPlayer.FadeTo(m_previewLoadState->stream);
+		}
+		else
+		{
+			Logf("Failed to load preview audio from [%s]", Logger::Severity::Warning, m_previewParams.filepath);
+			m_previewPlayer.FadeTo(Ref<AudioStream>());
+		}
+		m_previewLoadState.reset();
 	}
 
 	// When a map is selected in the song wheel
@@ -1593,6 +1634,7 @@ public:
 			{
 				m_previewParams = {"", 0, 0};
 
+				m_previewLoadState.reset();
 				m_previewPlayer.FadeTo(Ref<AudioStream>());
 				m_previewPlayer.StopCurrent();
 
@@ -1666,6 +1708,7 @@ public:
 			TickNavigation(deltaTime);
 
 
+			m_pollPreviewLoad();
 			m_previewPlayer.Update(deltaTime);
 			m_searchInput->Tick();
 			m_selectionWheel->SetSearchFieldLua(m_searchInput);

@@ -77,7 +77,7 @@ void GameplaySettingsDialog::InitTabs()
 	profileWindowTab->settings.push_back(m_CreateProfileSetting("Main"));
 	{
 
-        Vector<FileInfo> files = Files::ScanFiles(
+        Vector<USCFileInfo> files = Files::ScanFiles(
             Path::Absolute("profiles/"), "cfg", NULL);
 
         for (auto &file : files)

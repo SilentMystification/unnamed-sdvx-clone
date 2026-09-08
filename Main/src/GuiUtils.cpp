@@ -209,8 +209,11 @@ void BasicNuklearGui::InitNuklearFontAtlasFallback(struct nk_font_atlas* atlas, 
 		0
 	};
 
-	int maxTextureSize = 0;
-	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+	// GLint is `long` on some targets' GL headers, not `int` - see the same fix in
+	// Graphics/src/OpenGL.cpp's GetViewport().
+	GLint maxTextureSizeGL = 0;
+	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSizeGL);
+	int maxTextureSize = (int)maxTextureSizeGL;
 	Logf("System max texture size: %d (cjk small: %d / large: %d)", Logger::Severity::Info,
 		maxTextureSize, CJK_SIZE_SMALL, CJK_SIZE_LARGE);
 

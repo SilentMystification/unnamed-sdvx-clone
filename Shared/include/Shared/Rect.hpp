@@ -171,7 +171,7 @@ namespace Shared
 		}
 	};
 
-	typedef RectangleBase<float> Rect;
+	typedef RectangleBase<float> RectF;
 	typedef RectangleBase<int32> Recti;
 	typedef RectangleBase3D<float> Rect3D;
 	typedef RectangleBase3D<int32> Recti3D;

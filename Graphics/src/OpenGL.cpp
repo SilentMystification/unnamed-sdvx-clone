@@ -1,5 +1,7 @@
 #include "stdafx.h"
-#include "OpenGL.hpp"
+#include "OpenGL_Impl.hpp"
+#include "RenderBackendHooks.hpp"
+#include "WindowGLContext.hpp"
 #include <Graphics/ResourceManagers.hpp>
 #ifdef _MSC_VER
 #pragma comment(lib, "opengl32.lib")
@@ -16,13 +18,6 @@
 
 namespace Graphics
 {
-	class OpenGL_Impl
-	{
-	public:
-		SDL_GLContext context;
-		std::thread::id threadId;
-	};
-
 	OpenGL::OpenGL()
 	{
 		m_impl = new OpenGL_Impl();
@@ -39,14 +34,9 @@ namespace Graphics
 			ResourceManagers::DestroyResourceManager<ResourceType::Material>();
 			ResourceManagers::DestroyResourceManager<ResourceType::ParticleSystem>();
 
-#ifndef EMBEDDED
-			if(m_mainProgramPipeline)
-			{
-				glDeleteProgramPipelines(1, &m_mainProgramPipeline);
-			}
-#endif
+			RenderBackendHooks::DestroyMainProgramPipeline(m_mainProgramPipeline);
 
-			SDL_GL_DeleteContext(m_impl->context);
+			WindowGLContext::Destroy(m_impl->context);
 			m_impl->context = nullptr;
 		}
 		delete m_impl;
@@ -60,104 +50,19 @@ namespace Graphics
 		ResourceManagers::CreateResourceManager<ResourceType::Material>();
 		ResourceManagers::CreateResourceManager<ResourceType::ParticleSystem>();
 	}
-	bool OpenGL::Init(Window& window, uint32 antialiasing)
-	{
-		if(m_impl->context)
-			return true; // Already initialized
-
-		// Store the thread ID that the OpenGL context runs on
-		m_impl->threadId = std::this_thread::get_id();
-
-		m_window = &window;
-		SDL_Window* sdlWnd = (SDL_Window*)m_window->Handle();
-
-#ifdef EMBEDDED
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-#else
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-#endif
-		// Create a context
-		m_impl->context = SDL_GL_CreateContext(sdlWnd);
-		if(!m_impl->context)
-		{
-            Logf("Failed to create OpenGL context: %s", Logger::Severity::Error, SDL_GetError());
-            return false;
-		}
-
-		if (SDL_GL_MakeCurrent(sdlWnd, m_impl->context) < 0)
-		{
-			Logf("Failed to set OpenGL context to current: %s", Logger::Severity::Error, SDL_GetError());
-			return false;
-		}
-
-		//windows always needs glew
-#ifdef _WIN32
-		glewExperimental = true;
-		glewInit();
-#else
-
-		// macOS and embedded doesnt need glew
-		#ifndef EMBEDDED
-		#ifndef __APPLE__
-		// To allow usage of experimental features
-		glewExperimental = true;
-		glewInit();
-		#endif
-		#endif
-#endif
-
-		//#define LIST_OGL_EXTENSIONS
-#ifdef LIST_OGL_EXTENSIONS
-		Logf("Listing OpenGL Extensions:", Logger::Info);
-		GLint n, i;
-		glGetIntegerv(GL_NUM_EXTENSIONS, &n);
-		for(i = 0; i < n; i++) {
-			Logf("%s", Logger::Info, glGetStringi(GL_EXTENSIONS, i));
-		}
-#endif
-
-#ifdef _DEBUG
-		// Setup GL debug messages to go to the console
-		if(glDebugMessageCallback && glDebugMessageControl)
-		{
-			Log("OpenGL Logging on.", Logger::Severity::Info);
-			glDebugMessageCallback(GLDebugProc, 0);
-			glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, 0, GL_TRUE);
-			glDebugMessageControl(GL_DONT_CARE, GL_DEBUG_TYPE_OTHER, GL_DONT_CARE, 0, 0, GL_FALSE);
-		}
-#endif
-
-		Logf("OpenGL Version: %s", Logger::Severity::Info, glGetString(GL_VERSION));
-		Logf("OpenGL Shading Language Version: %s", Logger::Severity::Info, glGetString(GL_SHADING_LANGUAGE_VERSION));
-		Logf("OpenGL Renderer: %s", Logger::Severity::Info, glGetString(GL_RENDERER));
-		Logf("OpenGL Vendor: %s", Logger::Severity::Info, glGetString(GL_VENDOR));
-
-		InitResourceManagers();
-
-#ifndef EMBEDDED
-		// Create pipeline for the program
-		glGenProgramPipelines(1, &m_mainProgramPipeline);
-		glBindProgramPipeline(m_mainProgramPipeline);
-		glEnable(GL_TEXTURE_2D);
-		glEnable(GL_MULTISAMPLE);
-#endif
-
-		glDisable(GL_DEPTH_TEST);
-		glEnable(GL_CULL_FACE);
-		glEnable(GL_BLEND);
-		glEnable(GL_STENCIL_TEST);
-		return true;
-	}
-
 
 	Recti OpenGL::GetViewport() const
 	{
+		// GLint is `long` on this target's GL headers (not `int` as on most others,
+		// where int32*/GLint* just happen to already match) - read through a
+		// same-typed buffer instead of reinterpreting Recti's own int32 fields.
+		GLint viewport[4];
+		glGetIntegerv(GL_VIEWPORT, viewport);
 		Recti vp;
-		glGetIntegerv(GL_VIEWPORT, &vp.pos.x);
+		vp.pos.x = (int32)viewport[0];
+		vp.pos.y = (int32)viewport[1];
+		vp.size.x = (int32)viewport[2];
+		vp.size.y = (int32)viewport[3];
 		return vp;
 	}
 	uint32 OpenGL::GetFramebufferHandle()
@@ -174,14 +79,14 @@ namespace Graphics
 	void OpenGL::MakeCurrent()
 	{
 		assert(m_impl->threadId != std::this_thread::get_id());
-		SDL_GL_MakeCurrent((SDL_Window*)m_window->Handle(), m_impl->context);
+		WindowGLContext::MakeCurrent(*m_window, m_impl->context);
 		m_impl->threadId = std::this_thread::get_id();
 
 	}
 	void OpenGL::ReleaseCurrent()
 	{
 		assert(m_impl->threadId == std::this_thread::get_id());
-		SDL_GL_MakeCurrent(NULL, NULL);
+		WindowGLContext::ReleaseCurrent();
 	}
 
 	void OpenGL::SetViewport(Vector2i size)
@@ -196,8 +101,12 @@ namespace Graphics
 	void OpenGL::SwapBuffers()
 	{
 		glFlush();
-		SDL_Window* sdlWnd = (SDL_Window*)m_window->Handle();
-		SDL_GL_SwapWindow(sdlWnd);
+		WindowGLContext::SwapBuffers(*m_window, m_impl->context);
+	}
+
+	void OpenGL::OnWindowMoved()
+	{
+		WindowGLContext::UpdateDrawable(*m_window, m_impl->context);
 	}
 
 	#ifdef _WIN32

@@ -22,6 +22,10 @@ static inline void sprintf_dtoa(char(&buffer)[64 /* NK_MAX_NUMBER_BUFFER */], do
 #define NK_SDL_GLES2_IMPLEMENTATION
 #include "../third_party/nuklear/nuklear.h"
 #include "nuklear/nuklear_sdl_gles2.h"
+#elif defined(USC_GL1_LEGACY)
+#define NK_GL1_IMPLEMENTATION
+#include "../third_party/nuklear/nuklear.h"
+#include "nuklear/nuklear_gl1.h"
 #else
 #define NK_SDL_GL3_IMPLEMENTATION
 #include "../third_party/nuklear/nuklear.h"
@@ -322,19 +326,23 @@ nk_font_atlas_end_keep_atlas(struct nk_font_atlas *atlas, nk_handle texture,
 NK_INTERN void
 usc_nk_sdl_device_upload_atlas(const void *image, int width, int height)
 {
-#ifndef EMBEDDED
-    // Use PDO for async texture upload
+#if !defined(EMBEDDED) && !defined(USC_GL1_LEGACY)
+    // Use PBO for async texture upload - GL2.1/ARB_pixel_buffer_object, not assumed
+    // present on GL1_LEGACY's G4-era target hardware (upload directly there instead,
+    // same as EMBEDDED already does).
     GLuint pdo;
     glGenBuffers(1, &pdo);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pdo);
     glBufferData(GL_PIXEL_UNPACK_BUFFER, 4*(nk_size)width*(nk_size)height, image, GL_STATIC_DRAW);
 #endif
-    struct nk_sdl_device *dev = &sdl.ogl;
+    // auto instead of a hardcoded `struct nk_sdl_device*`/`nk_gl1_device*` - only
+    // ->font_tex (common to every backend's device struct) is used below.
+    auto* dev = &sdl.ogl;
     glGenTextures(1, &dev->font_tex);
     glBindTexture(GL_TEXTURE_2D, dev->font_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-#ifndef EMBEDDED
+#if !defined(EMBEDDED) && !defined(USC_GL1_LEGACY)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)width, (GLsizei)height, 0,
                 GL_RGBA, GL_UNSIGNED_BYTE, 0);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -374,7 +382,15 @@ void usc_nk_sdl_use_atlas(nk_font_atlas* atlas, GLuint texture)
 NK_API void
 nk_sdl_device_destroy_keep_font(void)
 {
-    struct nk_sdl_device *dev = &sdl.ogl;
+    auto* dev = &sdl.ogl;
+#ifdef USC_GL1_LEGACY
+    // No shader program/VBO/EBO on this backend (see nuklear_gl1.h) - just the CPU-side
+    // scratch buffers nk_sdl_render() (re)allocates each frame.
+    free(dev->vertex_mem);
+    free(dev->element_mem);
+    dev->vertex_mem = dev->element_mem = NULL;
+    dev->vertex_mem_size = dev->element_mem_size = 0;
+#else
     glDetachShader(dev->prog, dev->vert_shdr);
     glDetachShader(dev->prog, dev->frag_shdr);
     glDeleteShader(dev->vert_shdr);
@@ -382,6 +398,7 @@ nk_sdl_device_destroy_keep_font(void)
     glDeleteProgram(dev->prog);
     glDeleteBuffers(1, &dev->vbo);
     glDeleteBuffers(1, &dev->ebo);
+#endif
     nk_buffer_free(&dev->cmds);
 }
 

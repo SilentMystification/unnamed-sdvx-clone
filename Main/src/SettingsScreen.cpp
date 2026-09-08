@@ -904,7 +904,7 @@ private:
 				continue;
 
 			String replayPath = Path::Normalize(Path::Absolute("replays/" + chart->hash + "/"));
-			Vector<FileInfo> files = Files::ScanFiles(replayPath, "urf");
+			Vector<USCFileInfo> files = Files::ScanFiles(replayPath, "urf");
 			for (auto& s : files)
 			{
 				String name;

@@ -185,8 +185,8 @@ bool Track::AsyncFinalize()
 		//track base
 		Vector2 pos = Vector2(-trackWidth * 0.5f * i, -1);
 		Vector2 size = Vector2(trackWidth / 2.0f, trackLength + 1);
-		Rect rect = Rect(pos, size);
-		Rect uv = Rect(0.5 - 0.5 * i, 0.0f, 1.0 - 0.5 * i, 1.0f);
+		RectF rect = RectF(pos, size);
+		RectF uv = RectF(0.5 - 0.5 * i, 0.0f, 1.0 - 0.5 * i, 1.0f);
 		splitTrackMesh[i] = MeshRes::Create(g_gl);
 		splitTrackMesh[i]->SetPrimitiveType(PrimitiveType::TriangleList);
 		Vector<MeshGenerators::SimpleVertex> splitMeshData;
@@ -196,7 +196,7 @@ bool Track::AsyncFinalize()
 		//track cover
 		pos = Vector2(-trackWidth * 0.5f * i, -trackLength);
 		size = Vector2(trackWidth / 2.0f, trackLength * 2.0);
-		rect = Rect(pos, size);
+		rect = RectF(pos, size);
 		splitTrackCoverMesh[i] = MeshRes::Create(g_gl);
 		splitTrackCoverMesh[i]->SetPrimitiveType(PrimitiveType::TriangleList);
 		splitMeshData.clear();
@@ -206,7 +206,7 @@ bool Track::AsyncFinalize()
 		//tick meshes
 		pos = Vector2(-buttonTrackWidth * 0.5f * i, 0.0f);
 		size = Vector2(buttonTrackWidth / 2.0f, trackTickLength);
-		rect = Rect(pos, size);
+		rect = RectF(pos, size);
 		splitTrackTickMesh[i] = MeshRes::Create(g_gl);
 		splitTrackTickMesh[i]->SetPrimitiveType(PrimitiveType::TriangleList);
 		splitMeshData.clear();

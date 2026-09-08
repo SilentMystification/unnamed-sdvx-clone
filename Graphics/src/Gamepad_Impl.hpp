@@ -1,8 +1,6 @@
 #pragma once
 #include "Gamepad.hpp"
 
-#include "SDL2/SDL_joystick.h"
-
 namespace Graphics
 {
 	class Window;
@@ -17,9 +15,19 @@ namespace Graphics
 		void HandleAxisEvent(uint32 axisIndex, int16 newValue);
 		void HandleHatEvent(uint32 hadIndex, uint8 newValue);
 
+		// Backend hook: on SDL2 a no-op (real button/axis state arrives from the OS
+		// event queue via WindowImpl_SDL2.cpp calling HandleInputEvent/HandleAxisEvent
+		// directly). On Carbon, there's no such queue - Window_Impl::Update() calls this
+		// once per frame so the backend can read current hardware state itself and diff
+		// it into the same HandleInputEvent/HandleAxisEvent calls.
+		void Poll();
+
 		class Window* m_window;
 		uint32 m_deviceIndex;
-		SDL_Joystick* m_joystick;
+		// Opaque backend device handle - SDL_Joystick* (SDL2) or a real IOKit-backed
+		// SDL_Joystick* (Carbon, see HIDJoystick_CARBON.cpp) are both just pointers, so
+		// this stays void* rather than pulling either backend's real type in here.
+		void* m_joystickHandle = nullptr;
 
 		Vector<float> m_axisState;
 		Vector<uint8> m_buttonStates;

@@ -64,7 +64,7 @@ struct GUIState
 	NVGcolor otrColor; //outer color
 	NVGcolor inrColor; //inner color
 	NVGcolor imageTint;
-	Rect scissor;
+	RectF scissor;
 	Vector2i resolution;
 	Map<int, Ref<ImageAnimation>> animations;
 	int scissorOffset;
@@ -128,10 +128,10 @@ static int lBeginPath(lua_State* L)
 }
 
 
-static void AnimationLoader(Vector<FileInfo> files, Ref<ImageAnimation> ia)
+static void AnimationLoader(Vector<USCFileInfo> files, Ref<ImageAnimation> ia)
 {
 	ia->FrameCount = files.size();
-	files.Sort([](FileInfo& a, FileInfo& b) {
+	files.Sort([](USCFileInfo& a, USCFileInfo& b) {
 		String af, bf;
 		Path::RemoveLast(a.fullPath, &af);
 		Path::RemoveLast(b.fullPath, &bf);
@@ -245,7 +245,7 @@ static int lTickAnimation(lua_State* L)
 
 static int LoadAnimation(lua_State* L, const char* path, float frametime, int loopcount, bool compressed)
 {
-	Vector<FileInfo> files = Files::ScanFiles(path);
+	Vector<USCFileInfo> files = Files::ScanFiles(path);
 	if (files.empty())
 		return -1;
 
@@ -408,6 +408,11 @@ static int lCreateImage(lua_State* L /*const char* filename, int imageflags */)
 		lua_pushnumber(L, handle);
 		return 1;
 	}
+	// nvgCreateImage returning 0 (file not found, or the underlying decoder failing) was
+	// silently swallowed here - the skin script just gets nil back with no indication why,
+	// which is exactly the kind of gap that leaves "images aren't showing" with zero log
+	// evidence to work from.
+	Logf("gfx.CreateImage: failed to load \"%s\"", Logger::Severity::Warning, filename);
 	return 0;
 }
 static int lImagePatternFill(lua_State* L /*int image, float alpha*/)
@@ -511,7 +516,20 @@ static int lCreateLabel(lua_State* L /*const char* text, int size, bool monospac
 	int monospace = luaL_checkinteger(L, 3);
 
 	Label newLabel;
-	newLabel.text = g_guiState.currentFont->CreateText(Utility::ConvertToWString(text), 
+	uint32 effectiveFontSize = (uint32)(size * g_guiState.t.GetScale().y);
+	if (effectiveFontSize == 0)
+	{
+		// Would silently produce zero-sized glyphs for every character (an empty, invisible
+		// text mesh) - if this ever fires, that's confirmed as the real cause of missing
+		// text (as opposed to a font-loading or rasterization failure). g_guiState.t is
+		// whatever nvg transform was active at the moment this particular gfx.CreateLabel()
+		// call ran, which for cached/pre-built labels (skins/Default/scripts/songselect's
+		// songCache pattern) may not be the same transform context as when the label is
+		// later drawn - a scale of exactly 0 here would mean it ran with a degenerate or
+		// not-yet-initialized transform.
+		Logf("gfx.CreateLabel: effective font size is 0 for \"%s\" (size=%d, scale=%.4f) - this label will render as nothing", Logger::Severity::Warning, text, size, g_guiState.t.GetScale().y);
+	}
+	newLabel.text = g_guiState.currentFont->CreateText(Utility::ConvertToWString(text),
 		size * g_guiState.t.GetScale().y,
 		(FontRes::TextOptions)monospace);
 	newLabel.scale = g_guiState.t.GetScale().y;
@@ -970,7 +988,7 @@ static int lScissor(lua_State* L /* float x, float y, float w, float h */)
 	Vector2 size = Vector2(w, h) * scale.xy();
 
 
-	g_guiState.scissor = Rect(topLeft, size);
+	g_guiState.scissor = RectF(topLeft, size);
 	
 	nvgScissor(g_guiState.vg, x, y, w, h);
 	return 0;
@@ -989,7 +1007,7 @@ static int lIntersectScissor(lua_State* L /* float x, float y, float w, float h 
 static int lResetScissor(lua_State* L /*  */)
 {
 	nvgResetScissor(g_guiState.vg);
-	g_guiState.scissor = Rect(0, 0, -1, -1);
+	g_guiState.scissor = RectF(0, 0, -1, -1);
 	return 0;
 }
 

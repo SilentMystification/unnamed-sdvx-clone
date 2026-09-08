@@ -3,7 +3,7 @@
 
 namespace Graphics
 {
-#ifndef EMBEDDED
+#ifdef USC_SEPARATE_SHADER_OBJECTS
 	extern const uint32 shaderStageMap[];
 #endif
 	/* Enum of supported shader types */
@@ -28,7 +28,7 @@ namespace Graphics
 		// Tries to hot-reload the shader program, only works if _DEBUG is defined
 		// returns true if the program was changed and thus the handle value also changed
 		virtual bool UpdateHotReload() = 0;
-		#ifndef EMBEDDED
+		#ifdef USC_SEPARATE_SHADER_OBJECTS
 		virtual void Bind() = 0;
 		[[nodiscard]]
 		virtual bool IsBound() const = 0;

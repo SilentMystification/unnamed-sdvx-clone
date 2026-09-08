@@ -18,10 +18,14 @@
 
 #ifdef EMBEDDED
 #define NANOVG_GLES2_IMPLEMENTATION
+#include "nanovg_gl.h"
+#elif defined(USC_GL1_LEGACY)
+#define NANOVG_GL1_IMPLEMENTATION
+#include "nanovg_gl1.h"
 #else
 #define NANOVG_GL3_IMPLEMENTATION
-#endif
 #include "nanovg_gl.h"
+#endif
 #include "GUI/nanovg_lua.h"
 #ifdef _WIN32
 #ifdef CRASHDUMP
@@ -300,12 +304,12 @@ int copyArchiveData(archive *ar, archive *aw)
 void Application::m_unpackSkins()
 {
 	bool interrupt = false;
-	Vector<FileInfo> files = Files::ScanFiles(
+	Vector<USCFileInfo> files = Files::ScanFiles(
 		Path::Absolute("skins/"), "usc-skin", &interrupt);
 	if (interrupt)
 		return;
 
-	for (FileInfo &fi : files)
+	for (USCFileInfo &fi : files)
 	{
 		Logf("[Archive] Extracting skin '%s'", Logger::Severity::Info, fi.fullPath);
 
@@ -660,6 +664,7 @@ void Application::m_SaveConfig()
 	}
 }
 
+#ifdef USC_ENABLE_DISCORD_RPC
 void __discordError(int errorCode, const char *message)
 {
 	g_application->DiscordError(errorCode, message);
@@ -687,6 +692,7 @@ void __discordDisconnected(int errcode, const char *msg)
 {
 	g_application->DiscordError(errcode, msg);
 }
+#endif // USC_ENABLE_DISCORD_RPC
 
 void __updateChecker()
 {
@@ -840,6 +846,7 @@ void Application::CheckForUpdate()
 
 void Application::m_InitDiscord()
 {
+#ifdef USC_ENABLE_DISCORD_RPC
 	ProfilerScope $("Discord RPC Init");
 	DiscordEventHandlers dhe;
 	memset(&dhe, 0, sizeof(dhe));
@@ -850,6 +857,7 @@ void Application::m_InitDiscord()
 	dhe.joinGame = __discordJoinGame;
 	dhe.disconnected = __discordDisconnected;
 	Discord_Initialize(DISCORD_APPLICATION_ID, &dhe, 1, nullptr);
+#endif
 }
 
 void Application::m_InitLightPlugins()
@@ -859,9 +867,9 @@ void Application::m_InitLightPlugins()
 	String pluginpath = Path::Absolute("LightPlugins");
 
 #if WIN32
-	Vector<FileInfo> plugins = Files::ScanFiles(pluginpath, "dll");
+	Vector<USCFileInfo> plugins = Files::ScanFiles(pluginpath, "dll");
 #else
-	Vector<FileInfo> plugins = Files::ScanFiles("LightPlugins", "so");
+	Vector<USCFileInfo> plugins = Files::ScanFiles("LightPlugins", "so");
 #endif
 
 	Logf("Found %d light plugins.", Logger::Severity::Info, plugins.size());
@@ -951,6 +959,11 @@ bool Application::m_Init()
 #ifdef GIT_COMMIT
 	Logf("Git commit: %s", Logger::Severity::Info, GIT_COMMIT);
 #endif // GIT_COMMIT
+
+	// Uncommitted local edits don't move GIT_COMMIT (it's read from the last real commit,
+	// not the working tree) - this is a manually-bumped marker with no other purpose than
+	// confirming which locally-built .app actually got copied to the drive and launched.
+	Log("PPC diagnostic build: 2026-09-08-build48 (quit-visual-feedback + shutdown/heartbeat/close-event logging)", Logger::Severity::Info);
 
 #ifdef _WIN32
 #ifdef CRASHDUMP
@@ -1211,6 +1224,8 @@ bool Application::m_Init()
 #else
 		g_guiState.vg = nvgCreateGLES2(0);
 #endif
+#elif defined(USC_GL1_LEGACY)
+		g_guiState.vg = nvgCreateGL1(0);
 #else
 #ifdef _DEBUG
 		g_guiState.vg = nvgCreateGL3(NVG_DEBUG);
@@ -1263,7 +1278,11 @@ bool Application::m_Init()
 
 	///TODO: check if directory exists already?
 	Path::CreateDir(Path::Absolute("screenshots"));
-	Path::CreateDir(Path::Absolute("songs"));
+	// Uses the configured SongFolder (not a hardcoded "songs") - on this port that
+	// defaults to a path outside the .app bundle (see GameConfig.cpp), so this must
+	// create/ensure that actual location exists, not a same-named-but-wrong folder
+	// nested inside Contents/MacOS/.
+	Path::CreateDir(Path::Absolute(g_gameConfig.GetString(GameConfigKeys::SongFolder)));
 	Path::CreateDir(Path::Absolute("replays"));
 	Path::CreateDir(Path::Absolute("crash_dumps"));
 	Logger::Get().SetLogLevel(g_gameConfig.GetEnum<Logger::Enum_Severity>(GameConfigKeys::LogLevel));
@@ -1278,7 +1297,9 @@ void Application::m_MainLoop()
 		m_appTime = appTimer.SecondsAsFloat();
 		m_frameTimer.Restart();
 		//run discord callbacks
+#ifdef USC_ENABLE_DISCORD_RPC
 		Discord_RunCallbacks();
+#endif
 
 		// Process changes in the list of items
 		bool restoreTop = false;
@@ -1355,6 +1376,19 @@ void Application::m_MainLoop()
 
 		// Main loop
 		float currentTime = appTimer.SecondsAsFloat();
+
+		// Lightweight liveness marker (much lower frequency than the per-frame diagnostics
+		// stripped out earlier this session) - specifically to tell apart "the main loop is
+		// still ticking but gameplay/chart state itself is stuck" from "the whole process
+		// hung" the next time something like a chart freeze gets reported.
+		{
+			static float lastHeartbeat = -1000.0f;
+			if (currentTime - lastHeartbeat >= 15.0f)
+			{
+				Logf("m_MainLoop heartbeat: t=%.1fs tickables=%d", Logger::Severity::Warning, currentTime, (int)g_tickables.size());
+				lastHeartbeat = currentTime;
+			}
+		}
 
 		g_avgRenderDelta = g_avgRenderDelta * 0.98f + m_deltaTime * 0.02f; // Calculate avg
 
@@ -1465,7 +1499,7 @@ void Application::RenderTickables()
 	else
 		g_guiState.scissorOffset = 0;
 
-	g_guiState.scissor = Rect(0, 0, -1, -1);
+	g_guiState.scissor = RectF(0, 0, -1, -1);
 	g_guiState.imageTint = nvgRGB(255, 255, 255);
 
 	CheckGLErrors("before rendering tickables");
@@ -1541,17 +1575,19 @@ void Application::RenderTickables()
 void Application::m_Cleanup()
 {
 	ProfilerScope $("Application Cleanup");
+	Log("m_Cleanup: started", Logger::Severity::Warning);
 
 	for (auto it : g_tickables)
 	{
 		delete it;
 	}
 	g_tickables.clear();
+	Log("m_Cleanup: tickables cleared, posting render thread", Logger::Severity::Warning);
 
 	SDL_SemPost(renderSema);
 	m_renderThread.join();
 	SDL_DestroySemaphore(renderSema);
-
+	Log("m_Cleanup: render thread joined", Logger::Severity::Warning);
 
 	if (g_audio)
 	{
@@ -1619,23 +1655,30 @@ void Application::m_Cleanup()
 
 	m_fonts.clear();
 
+#ifdef USC_ENABLE_DISCORD_RPC
 	Discord_Shutdown();
+#endif
 
 #ifdef EMBEDDED
 	nvgDeleteGLES2(g_guiState.vg);
+#elif defined(USC_GL1_LEGACY)
+	nvgDeleteGL1(g_guiState.vg);
 #else
 	nvgDeleteGL3(g_guiState.vg);
 #endif
 
 	Graphics::FontRes::FreeLibrary();
+	Log("m_Cleanup: joining update thread", Logger::Severity::Warning);
 	if (m_updateThread.joinable())
 		m_updateThread.join();
 
+	Log("m_Cleanup: joining font bake thread", Logger::Severity::Warning);
 	if (m_fontBakeThread.joinable())
 		m_fontBakeThread.join();
 
 	// Finally, save config
 	m_SaveConfig();
+	Log("m_Cleanup: finished, config saved", Logger::Severity::Warning);
 }
 
 class Game *Application::LaunchMap(const String &mapPath)
@@ -2008,6 +2051,7 @@ void Application::DiscordError(int errorCode, const char *message)
 
 void Application::DiscordPresenceMenu(String name)
 {
+#ifdef USC_ENABLE_DISCORD_RPC
 	DiscordRichPresence discordPresence;
 	memset(&discordPresence, 0, sizeof(discordPresence));
 	discordPresence.state = "In Menus";
@@ -2019,17 +2063,19 @@ void Application::DiscordPresenceMenu(String name)
 	discordPresence.partyId = *m_multiRoomId;
 
 	Discord_UpdatePresence(&discordPresence);
+#endif
 }
 
 void Application::DiscordPresenceMulti(String secret, int partySize, int partyMax, String id)
 {
-	DiscordRichPresence discordPresence;
-	memset(&discordPresence, 0, sizeof(discordPresence));
-
 	m_multiRoomCount = partySize;
 	m_multiRoomSize = partyMax;
 	m_multiRoomSecret = secret;
 	m_multiRoomId = id;
+
+#ifdef USC_ENABLE_DISCORD_RPC
+	DiscordRichPresence discordPresence;
+	memset(&discordPresence, 0, sizeof(discordPresence));
 
 	discordPresence.state = "In Lobby";
 	discordPresence.details = "Waiting for multiplayer game to start.";
@@ -2040,10 +2086,12 @@ void Application::DiscordPresenceMulti(String secret, int partySize, int partyMa
 	discordPresence.partyId = *m_multiRoomId;
 
 	Discord_UpdatePresence(&discordPresence);
+#endif
 }
 
 void Application::DiscordPresenceSong(const BeatmapSettings &song, int64 startTime, int64 endTime)
 {
+#ifdef USC_ENABLE_DISCORD_RPC
 	Vector<String> diffNames = {"NOV", "ADV", "EXH", "INF"};
 	DiscordRichPresence discordPresence;
 	memset(&discordPresence, 0, sizeof(discordPresence));
@@ -2072,6 +2120,7 @@ void Application::DiscordPresenceSong(const BeatmapSettings &song, int64 startTi
 	discordPresence.partyId = *m_multiRoomId;
 
 	Discord_UpdatePresence(&discordPresence);
+#endif
 }
 
 void Application::JoinMultiFromInvite(String secret)
@@ -2138,7 +2187,7 @@ Transform Application::GetCurrentGUITransform() const
 {
 	return g_guiState.t;
 }
-Rect Application::GetCurrentGUIScissor() const
+RectF Application::GetCurrentGUIScissor() const
 {
 	return g_guiState.scissor;
 }
@@ -2236,6 +2285,27 @@ void Application::m_OnKeyReleased(SDL_Scancode code, int32 delta)
 }
 void Application::m_OnWindowResized(const Vector2i &newSize)
 {
+	// A degenerate size here (0 or negative on either axis) would collapse every ortho
+	// projection derived from g_resolution/m_renderStateBase.viewportSize below to nothing
+	// - every draw call would keep succeeding at the API level (no GL error, nothing
+	// crashes) while producing literally zero visible geometry, forever, since nothing
+	// afterward ever corrects g_resolution back to something sane on its own. Window
+	// managers legitimately deliver bogus/transient bounds-changed events sometimes
+	// (minimize, off-screen moves, or - on this port's own GetWindowBounds/kWindowContentRgn
+	// path, unverified on real hardware - a transient state during window setup); ignoring
+	// them here is standard/safe regardless of why any single one might be wrong.
+	if (newSize.x <= 0 || newSize.y <= 0)
+	{
+		Logf("Ignoring degenerate window resize event: %dx%d", Logger::Severity::Warning, newSize.x, newSize.y);
+		return;
+	}
+
+	// Must happen before anything below that assumes the GL drawable already matches the
+	// window's new size (SetViewport/glViewport/glScissor calls just pick a sub-region of
+	// whatever the context currently thinks the drawable is - they don't make the context
+	// notice the drawable itself changed).
+	g_gl->OnWindowMoved();
+
 	if (g_gameConfig.GetBool(GameConfigKeys::ForcePortrait))
 	{
 		Vector2i tempsize = newSize; //do this because on startup g_resolution is the reference newSize
@@ -2249,7 +2319,7 @@ void Application::m_OnWindowResized(const Vector2i &newSize)
 		float top = 0;
 		float right = left + g_resolution.x;
 		float bottom = g_resolution.y;
-		g_gl->SetViewport(Rect(left, top, right, bottom));
+		g_gl->SetViewport(RectF(left, top, right, bottom));
 		glScissor(0, 0, g_resolution.x, g_resolution.y);
 
 		// Set in config
@@ -2289,6 +2359,8 @@ void Application::m_OnWindowResized(const Vector2i &newSize)
 
 void Application::m_OnWindowMoved(const Vector2i& newPos)
 {
+	g_gl->OnWindowMoved();
+
 	if (g_gameWindow->IsActive() && !g_gameWindow->IsFullscreen())
 	{
 		g_gameConfig.Set(GameConfigKeys::ScreenX, newPos.x);

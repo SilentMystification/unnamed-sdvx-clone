@@ -1,5 +1,6 @@
 #include "stdafx.h"
-#include "Mesh.hpp"
+#include "Mesh_Impl.hpp"
+#include "RenderBackendHooks.hpp"
 #include <Graphics/ResourceManagers.hpp>
 
 namespace Graphics
@@ -13,113 +14,66 @@ namespace Graphics
 		GL_LINE_STRIP,
 		GL_POINTS,
 	};
-	class Mesh_Impl : public MeshRes
+
+#ifndef USC_GL1_LEGACY
+	// GL3/GLES3: generic indexed vertex attributes (glVertexAttribPointer) + VAO.
+	// GL1_LEGACY has neither (no VAOs, no generic attribute indices - only the fixed
+	// position/texcoord/color/etc. client-array slots) so it provides its own Init()/
+	// SetData()/destructor entirely; see Mesh_GL1_LEGACY.cpp.
+	Mesh_Impl::~Mesh_Impl()
 	{
-		uint32 m_buffer = 0;
-		uint32 m_vao = 0;
-		PrimitiveType m_type;
-		uint32 m_glType;
-		size_t m_vertexCount;
-		bool m_bDynamic = true;
-	public:
-		Mesh_Impl()
-		{
-		}
-		~Mesh_Impl()
-		{
-			if(m_buffer)
-				glDeleteBuffers(1, &m_buffer);
-			if(m_vao)
-				glDeleteVertexArrays(1, &m_vao);
-		}
-		bool Init()
-		{
-			glGenBuffers(1, &m_buffer);
-			glGenVertexArrays(1, &m_vao);
-			return m_buffer != 0 && m_vao != 0;
-		}
+		if(m_buffer)
+			glDeleteBuffers(1, &m_buffer);
+		if(m_vao)
+			glDeleteVertexArrays(1, &m_vao);
+	}
 
-		void SetData(const void* pData, size_t vertexCount, const VertexFormatList& desc) override
-		{
-			glBindVertexArray(m_vao);
-			glBindBuffer(GL_ARRAY_BUFFER, m_buffer);
+	bool Mesh_Impl::Init()
+	{
+		glGenBuffers(1, &m_buffer);
+		glGenVertexArrays(1, &m_vao);
+		return m_buffer != 0 && m_vao != 0;
+	}
 
-			m_vertexCount = vertexCount;
-			size_t totalVertexSize = 0;
-			for(auto e : desc)
-				totalVertexSize += e.componentSize * e.components;
-			size_t index = 0;
-			size_t offset = 0;
-			for(auto e : desc)
+	void Mesh_Impl::SetData(const void* pData, size_t vertexCount, const VertexFormatList& desc)
+	{
+		glBindVertexArray(m_vao);
+		glBindBuffer(GL_ARRAY_BUFFER, m_buffer);
+
+		m_vertexCount = vertexCount;
+		size_t totalVertexSize = 0;
+		for(auto e : desc)
+			totalVertexSize += e.componentSize * e.components;
+		size_t index = 0;
+		size_t offset = 0;
+		for(auto e : desc)
+		{
+			uint32 type = -1;
+			if(!e.isFloat)
 			{
-				uint32 type = -1;
-				if(!e.isFloat)
-				{
-					if(e.componentSize == 4)
-						type = e.isSigned ? GL_INT : GL_UNSIGNED_INT;
-					else if(e.componentSize == 2)
-						type = e.isSigned ? GL_SHORT : GL_UNSIGNED_SHORT;
-					else if(e.componentSize == 1)
-						type = e.isSigned ? GL_BYTE : GL_UNSIGNED_BYTE;
-				}
-				else
-				{
-					#ifdef EMBEDDED
-					type = GL_FLOAT;
-					#else
-					if(e.componentSize == 4)
-						type = GL_FLOAT;
-					else if(e.componentSize == 8)
-						type = GL_DOUBLE;
-					#endif
-				}
-				assert(type != (uint32)-1);
-				glVertexAttribPointer((int)index, (int)e.components, type, GL_TRUE, (int)totalVertexSize, (void*)offset);
-				glEnableVertexAttribArray((int)index);
-				offset += e.componentSize * e.components;
-				index++;
+				if(e.componentSize == 4)
+					type = e.isSigned ? GL_INT : GL_UNSIGNED_INT;
+				else if(e.componentSize == 2)
+					type = e.isSigned ? GL_SHORT : GL_UNSIGNED_SHORT;
+				else if(e.componentSize == 1)
+					type = e.isSigned ? GL_BYTE : GL_UNSIGNED_BYTE;
 			}
-			glBufferData(GL_ARRAY_BUFFER, totalVertexSize * vertexCount, pData, m_bDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
+			else
+			{
+				type = RenderBackendHooks::FloatAttribType(e.componentSize);
+			}
+			assert(type != (uint32)-1);
+			glVertexAttribPointer((int)index, (int)e.components, type, GL_TRUE, (int)totalVertexSize, (void*)offset);
+			glEnableVertexAttribArray((int)index);
+			offset += e.componentSize * e.components;
+			index++;
+		}
+		glBufferData(GL_ARRAY_BUFFER, totalVertexSize * vertexCount, pData, m_bDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
 
-			glBindVertexArray(0);
-			glBindBuffer(GL_ARRAY_BUFFER, 0);
-		}
-		
-		#ifdef EMBEDDED
-		void Draw() override
-		{
-			glBindVertexArray(m_vao);
-			glDrawArrays(m_glType, 0, (int)m_vertexCount);
-			glBindVertexArray(0);
-		}
-		void Redraw() override
-		{
-			glBindVertexArray(m_vao);
-			glDrawArrays(m_glType, 0, (int)m_vertexCount);
-			glBindVertexArray(0);
-		}
-		#else
-		void Draw() override
-		{
-			glBindVertexArray(m_vao);
-			glDrawArrays(m_glType, 0, (int)m_vertexCount);
-		}
-		void Redraw() override
-		{
-			glDrawArrays(m_glType, 0, (int)m_vertexCount);
-		}
-		#endif
-
-		void SetPrimitiveType(PrimitiveType pt) override
-		{
-			m_type = pt;
-			m_glType = primitiveTypeMap[(size_t)pt];
-		}
-		virtual PrimitiveType GetPrimitiveType() const override
-		{
-			return m_type;
-		}
-	};
+		glBindVertexArray(0);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+#endif
 
 	Mesh MeshRes::Create(class OpenGL* gl)
 	{

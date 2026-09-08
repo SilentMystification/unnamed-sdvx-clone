@@ -4,10 +4,10 @@
 #include "Log.hpp"
 #include "List.hpp"
 
-static Map<String, Vector<FileInfo>>  _ScanFiles(const String& rootFolder, const Vector<String>& extFilters, bool recurse, bool* interrupt)
+static Map<String, Vector<USCFileInfo>>  _ScanFiles(const String& rootFolder, const Vector<String>& extFilters, bool recurse, bool* interrupt)
 {
 	// Found files will go in here. If there is no filter extensions or only "" then all files will have "" as their key
-	Map<String, Vector<FileInfo>> ret;
+	Map<String, Vector<USCFileInfo>> ret;
 
 	Vector<String> fixedExts;
 	for (int i=0; i<extFilters.size(); i++)
@@ -16,7 +16,7 @@ static Map<String, Vector<FileInfo>>  _ScanFiles(const String& rootFolder, const
 		String ext = extFilters[i];
 
 		// Add empty vectors for collecting results
-		ret[ext] = Vector<FileInfo>();
+		ret[ext] = Vector<USCFileInfo>();
 
 		ext.TrimFront('.');
 		fixedExts.push_back(ext); // Remove possible leading dot
@@ -36,7 +36,7 @@ static Map<String, Vector<FileInfo>>  _ScanFiles(const String& rootFolder, const
 	bool filterByExtension = extFilters.size() != 0 && !(extFilters.size() == 1 && fixedExts[0].empty());
 	// Make sure the empty one is ready
 	if (!filterByExtension)
-		ret[""] = Vector<FileInfo>();
+		ret[""] = Vector<USCFileInfo>();
 
 	// Recursive folder search
 	while(!folderQueue.empty() && (!interrupt || !*interrupt))
@@ -60,10 +60,10 @@ static Map<String, Vector<FileInfo>>  _ScanFiles(const String& rootFolder, const
 			if(filename == "..")
 				continue;
 
-			FileInfo info;
+			USCFileInfo info;
 			info.fullPath = Path::Normalize(searchPath + Path::sep + filename);
 			info.lastWriteTime = ((uint64)findDataW.ftLastWriteTime.dwHighDateTime << 32) | (uint64)findDataW.ftLastWriteTime.dwLowDateTime;
-			info.type = FileType::Regular;
+			info.type = USCFileType::Regular;
 
 			if(findDataW.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 			{
@@ -74,7 +74,7 @@ static Map<String, Vector<FileInfo>>  _ScanFiles(const String& rootFolder, const
 				}
 				else if(!filterByExtension)
 				{
-					info.type = FileType::Folder;
+					info.type = USCFileType::Folder;
 					ret[""].push_back(info);
 				}
 			}
@@ -109,20 +109,20 @@ static Map<String, Vector<FileInfo>>  _ScanFiles(const String& rootFolder, const
 }
 
 
-Map<String, Vector<FileInfo>>Files::ScanFiles(const String& folder, const Vector<String>& extFilters, bool* interrupt)
+Map<String, Vector<USCFileInfo>>Files::ScanFiles(const String& folder, const Vector<String>& extFilters, bool* interrupt)
 {
 	return _ScanFiles(folder, extFilters, false, interrupt);
 }
-Map<String, Vector<FileInfo>>Files::ScanFilesRecursive(const String& folder, const Vector<String>& extFilters, bool* interrupt)
+Map<String, Vector<USCFileInfo>>Files::ScanFilesRecursive(const String& folder, const Vector<String>& extFilters, bool* interrupt)
 {
 	return _ScanFiles(folder, extFilters, true, interrupt);
 }
 
-Vector<FileInfo> Files::ScanFiles(const String& folder, const String& extFilter /*= String()*/, bool* interrupt)
+Vector<USCFileInfo> Files::ScanFiles(const String& folder, const String& extFilter /*= String()*/, bool* interrupt)
 {
 	return _ScanFiles(folder, Vector<String>(1, extFilter), false, interrupt)[extFilter];
 }
-Vector<FileInfo> Files::ScanFilesRecursive(const String& folder, const String& extFilter /*= String()*/, bool* interrupt)
+Vector<USCFileInfo> Files::ScanFilesRecursive(const String& folder, const String& extFilter /*= String()*/, bool* interrupt)
 {
 	return _ScanFiles(folder, Vector<String>(1, extFilter), true, interrupt)[extFilter];
 }

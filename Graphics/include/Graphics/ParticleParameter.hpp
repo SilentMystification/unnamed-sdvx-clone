@@ -56,7 +56,7 @@ namespace Graphics
 		PPRandomRange(const T& min, const T& max) : min(min), max(max) { delta = max - min; };
 		T Init(float systemTime) override
 		{
-			return Sample(Random::Float());
+			return Sample(RandomUtil::Float());
 		}
 		T Sample(float in) override
 		{
@@ -139,7 +139,7 @@ namespace Graphics
 		[[nodiscard]]
 		Vector3 Sample(float in) override
 		{
-			return Vector3(Random::FloatRange(-1.0f, 1.0f), Random::FloatRange(-1.0f, 1.0f), Random::FloatRange(-1.0f, 1.0f)) * radius;
+			return Vector3(RandomUtil::FloatRange(-1.0f, 1.0f), RandomUtil::FloatRange(-1.0f, 1.0f), RandomUtil::FloatRange(-1.0f, 1.0f)) * radius;
 		}
 		[[nodiscard]]
 		Vector3 GetMax() override
@@ -162,9 +162,9 @@ namespace Graphics
 		Vector3 Sample(float in) override
 		{
 			Vector3 offset = -size * 0.5f;
-			offset.x += Random::Float() * size.x;
-			offset.y += Random::Float() * size.y;
-			offset.z += Random::Float() * size.z;
+			offset.x += RandomUtil::Float() * size.x;
+			offset.y += RandomUtil::Float() * size.y;
+			offset.z += RandomUtil::Float() * size.z;
 			return offset;
 		}
 		[[nodiscard]]
@@ -202,11 +202,11 @@ namespace Graphics
 		[[nodiscard]]
 		virtual Vector3 Sample(float in) override
 		{
-			float length = Random::FloatRange(lengthMin, lengthMax);
+			float length = RandomUtil::FloatRange(lengthMin, lengthMax);
 
-			float a = Random::FloatRange(-1, 1);
-			float b = Random::FloatRange(-1, 1);
-			float c = Random::FloatRange(-1, 1);
+			float a = RandomUtil::FloatRange(-1, 1);
+			float b = RandomUtil::FloatRange(-1, 1);
+			float c = RandomUtil::FloatRange(-1, 1);
 			a = a * a * Math::Sign(a);
 			b = b * b * Math::Sign(b);
 			c = c * c * Math::Sign(c);

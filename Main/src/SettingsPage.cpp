@@ -327,7 +327,7 @@ protected:
 		m_profiles.clear();
 		m_profiles.push_back("Main");
 
-		Vector<FileInfo> profiles = Files::ScanFiles(Path::Absolute("profiles/"), "cfg", NULL);
+		Vector<USCFileInfo> profiles = Files::ScanFiles(Path::Absolute("profiles/"), "cfg", NULL);
 
 		for (const auto& file : profiles)
 		{

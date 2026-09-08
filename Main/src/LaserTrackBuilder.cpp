@@ -5,7 +5,7 @@
 #include "GameConfig.hpp"
 #include <algorithm>
 
-using Shared::Rect;
+using Shared::RectF;
 using Shared::Rect3D;
 
 
@@ -202,7 +202,7 @@ Mesh LaserTrackBuilder::GenerateTrackEntry(class BeatmapPlayback& playback, Lase
 
 	Vector<MeshGenerators::SimpleVertex> verts;
 	Rect3D pos = Rect3D(Vector2(startingX - actualLaserWidth, -length), Vector2(actualLaserWidth * 2, length));
-	Rect uv = Rect(-0.5f, 0.0f, 1.5f, 1.0f);
+	RectF uv = RectF(-0.5f, 0.0f, 1.5f, 1.0f);
 	MeshGenerators::GenerateSimpleXYQuad(pos, uv, verts);
 
 	newMesh->SetData(verts);
@@ -242,7 +242,7 @@ Mesh LaserTrackBuilder::GenerateTrackExit(class BeatmapPlayback& playback, Laser
 
 	Vector<MeshGenerators::SimpleVertex> verts;
 	Rect3D pos = Rect3D(Vector2(startingX - actualLaserWidth, prevLength), Vector2(actualLaserWidth * 2, length));
-	Rect uv = Rect(-0.5f, 0.0f, 1.5f, 1.0f);
+	RectF uv = RectF(-0.5f, 0.0f, 1.5f, 1.0f);
 	MeshGenerators::GenerateSimpleXYQuad(pos, uv, verts);
 
 	newMesh->SetData(verts);

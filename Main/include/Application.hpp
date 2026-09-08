@@ -103,7 +103,7 @@ public:
 	[[nodiscard]]
 	Transform GetCurrentGUITransform() const;
 	[[nodiscard]]
-	Rect GetCurrentGUIScissor() const;
+	RectF GetCurrentGUIScissor() const;
 	void StoreNamedSample(String name, Sample sample);
 	void PlayNamedSample(String name, bool loop);
 	void StopNamedSample(String name);
@@ -219,7 +219,9 @@ public:
 	Application::CachedJacketImage *target;
 };
 
+#ifdef USC_ENABLE_DISCORD_RPC
 void __discordJoinGame(const char* joins);
+#endif
 
 class SharedTexture {
 public:

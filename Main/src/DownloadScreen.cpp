@@ -270,13 +270,13 @@ void DownloadScreen::m_ArchiveLoop()
 	{
 		String preview_path = Path::Normalize(Path::Absolute("preview/"));
 		Vector<String> exts = { "mp3", "oog", "wav" };
-		Map<String, Vector<FileInfo>> previews = Files::ScanFilesRecursive(preview_path, exts, nullptr);
+		Map<String, Vector<USCFileInfo>> previews = Files::ScanFilesRecursive(preview_path, exts, nullptr);
 		uint64 now = Shared::Time::Now().Data();
 		Log("Checking for old preview files", Logger::Severity::Info);
 		int removed = 0;
 		for (const auto& ext : exts)
 		{
-			for (const FileInfo& fi : previews[ext])
+			for (const USCFileInfo& fi : previews[ext])
 			{
 				uint64 writeTime = File::FileTimeToUnixTimestamp(fi.lastWriteTime);
 

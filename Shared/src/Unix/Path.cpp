@@ -9,6 +9,7 @@
 */
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <sys/syslimits.h> // PATH_MAX - not reliably pulled in transitively on every SDK
 #else
 #include <linux/limits.h>
 #endif

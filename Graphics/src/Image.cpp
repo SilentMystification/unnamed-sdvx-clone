@@ -3,6 +3,7 @@
 #include <Graphics/ResourceManagers.hpp>
 #include "ImageLoader.hpp"
 #include "OpenGL.hpp"
+#include "RenderBackendHooks.hpp"
 
 #ifdef __APPLE__
 #include "libpng16/png.h"
@@ -90,7 +91,7 @@ namespace Graphics
 			}
 
 			//Set texture from buffer
-			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+			RenderBackendHooks::BindDefaultReadFramebuffer();
 			glReadBuffer(GL_BACK);
 			glBindTexture(GL_TEXTURE_2D, texture);
 			glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pos.x, pos.y, m_size.x, m_size.y);
@@ -104,11 +105,7 @@ namespace Graphics
 
 
 			//Copy texture contents to image pData
-			#ifdef EMBEDDED
-			glReadPixels(0, 0, m_size.x, m_size.y, GL_RGBA, GL_UNSIGNED_BYTE, m_pData);
-			#else
-			glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, m_pData);
-			#endif
+			RenderBackendHooks::ReadTexture2DPixels(m_size, m_pData);
 			glBindTexture(GL_TEXTURE_2D, 0);
 			glFinish();
 

@@ -1,6 +1,39 @@
 #include "stdafx.h"
 #include "AudioStreamWav.hpp"
 
+void AudioStreamWav::m_swapHeader(WavHeader& h)
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	h.nLength = __builtin_bswap32(h.nLength);
+#else
+	(void)h;
+#endif
+}
+void AudioStreamWav::m_swapFormat(WavFormat& f)
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	f.nFormat = __builtin_bswap16(f.nFormat);
+	f.nChannels = __builtin_bswap16(f.nChannels);
+	f.nSampleRate = __builtin_bswap32(f.nSampleRate);
+	f.nByteRate = __builtin_bswap32(f.nByteRate);
+	f.nBlockAlign = __builtin_bswap16(f.nBlockAlign);
+	f.nBitsPerSample = __builtin_bswap16(f.nBitsPerSample);
+#else
+	(void)f;
+#endif
+}
+void AudioStreamWav::m_swapPcm16(void* data, size_t byteLen)
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	int16* samples = (int16*)data;
+	size_t count = byteLen / sizeof(int16);
+	for(size_t i = 0; i < count; i++)
+		samples[i] = (int16)__builtin_bswap16((uint16)samples[i]);
+#else
+	(void)data; (void)byteLen;
+#endif
+}
+
 uint32 AudioStreamWav::m_decode_ms_adpcm(const Buffer &encoded, Buffer *decoded, uint64 pos)
 {
 	int16 *pcm = (int16 *)decoded->data();
@@ -16,15 +49,25 @@ uint32 AudioStreamWav::m_decode_ms_adpcm(const Buffer &encoded, Buffer *decoded,
 	assert(blockPredictors[0] >= 0 && blockPredictors[0] < 7);
 	assert(blockPredictors[1] >= 0 && blockPredictors[0] < 7);
 
+	// These 6 fields are the MS_ADPCM block header's 16-bit values, straight off disk
+	// (little-endian, same as the rest of WAV) - swap on read on a big-endian host, same
+	// reasoning as m_swapPcm16 above. The nibble-packed sample data read further below is
+	// bit-level, not byte-order-sensitive.
 	int16 *src_16 = (int16 *)src;
-	ideltas[0] = *src_16++;
-	ideltas[1] = *src_16++;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	#define USC_ADPCM_READ16(x) (int16)__builtin_bswap16((uint16)(x))
+#else
+	#define USC_ADPCM_READ16(x) (x)
+#endif
+	ideltas[0] = USC_ADPCM_READ16(*src_16++);
+	ideltas[1] = USC_ADPCM_READ16(*src_16++);
 
-	sample1[0] = *src_16++;
-	sample1[1] = *src_16++;
+	sample1[0] = USC_ADPCM_READ16(*src_16++);
+	sample1[1] = USC_ADPCM_READ16(*src_16++);
 
-	sample2[0] = *src_16++;
-	sample2[1] = *src_16++;
+	sample2[0] = USC_ADPCM_READ16(*src_16++);
+	sample2[1] = USC_ADPCM_READ16(*src_16++);
+#undef USC_ADPCM_READ16
 
 	*pcm++ = sample2[0];
 	*pcm++ = sample2[1];
@@ -92,6 +135,7 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 	{
 		WavHeader riff;
 		m_memoryReader << riff;
+		m_swapHeader(riff);
 		if (riff != "RIFF")
 			return false;
 
@@ -104,9 +148,11 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 		{
 			WavHeader chunkHdr;
 			m_memoryReader << chunkHdr;
+			m_swapHeader(chunkHdr);
 			if (chunkHdr == "fmt ")
 			{
 				m_memoryReader << m_format;
+				m_swapFormat(m_format);
 				String format = "Unknown";
 				if (m_format.nFormat == 1)
 					format = "PCM";
@@ -121,6 +167,9 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 				{
 					uint16 cbSize;
 					m_memoryReader << cbSize;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+					cbSize = __builtin_bswap16(cbSize);
+#endif
 					m_memoryReader.Skip(cbSize);
 				}
 			}
@@ -128,6 +177,9 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 			{
 				uint32 fh;
 				m_memoryReader << fh;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+				fh = __builtin_bswap32(fh);
+#endif
 				m_samplesTotal = fh;
 			}
 			else if (chunkHdr == "data") // data Chunk
@@ -146,12 +198,20 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 					m_samplesTotal = (chunkHdr.nLength / sizeof(short)) / m_format.nChannels;
 					m_Internaldata.resize(chunkHdr.nLength);
 					m_memoryReader.Serialize(m_Internaldata.data(), chunkHdr.nLength);
+					// Plain PCM: every sample is a 16-bit value straight off disk - swap
+					// in place once here so every downstream read of m_Internaldata below
+					// sees native-order samples already.
+					m_swapPcm16(m_Internaldata.data(), chunkHdr.nLength);
 				}
 				else if (m_format.nFormat == 2)
 				{
 					m_samplesTotal = chunkHdr.nLength;
 					m_Internaldata.resize(m_samplesTotal);
 					m_memoryReader.Serialize(m_Internaldata.data(), chunkHdr.nLength);
+					// MS_ADPCM: NOT a uniform array of 16-bit samples (mix of 8-bit
+					// predictors, nibble-packed data, and a few 16-bit fields) - swapping
+					// the whole buffer here would be wrong. m_decode_ms_adpcm() swaps its
+					// own 16-bit fields individually instead.
 				}
 
 				//Decode to float
@@ -212,6 +272,7 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 	{
 		WavHeader riff;
 		m_fileReader << riff;
+		m_swapHeader(riff);
 		if (riff != "RIFF")
 			return false;
 
@@ -224,9 +285,11 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 		{
 			WavHeader chunkHdr;
 			m_fileReader << chunkHdr;
+			m_swapHeader(chunkHdr);
 			if (chunkHdr == "fmt ")
 			{
 				m_fileReader << m_format;
+				m_swapFormat(m_format);
 				String format = "Unknown";
 				if (m_format.nFormat == 1)
 					format = "PCM";
@@ -241,6 +304,9 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 				{
 					uint16 cbSize;
 					m_fileReader << cbSize;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+					cbSize = __builtin_bswap16(cbSize);
+#endif
 					m_fileReader.Skip(cbSize);
 				}
 			}
@@ -248,6 +314,9 @@ bool AudioStreamWav::Init(Audio *audio, const String &path, bool preload)
 			{
 				uint32 fh;
 				m_fileReader << fh;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+				fh = __builtin_bswap32(fh);
+#endif
 				m_samplesTotal = fh;
 			}
 			else if (chunkHdr == "data") // data Chunk
@@ -325,6 +394,7 @@ int32 AudioStreamWav::DecodeData_Internal()
 			Buffer readData;
 			readData.resize(samplesPerRead * m_format.nChannels * sizeof(short));
 			m_fileReader.Serialize(readData.data(), samplesPerRead * m_format.nChannels * sizeof(short));
+			m_swapPcm16(readData.data(), readData.size());
 			int16 *src = ((int16 *)readData.data());
 			if (m_format.nChannels == 2)
 			{

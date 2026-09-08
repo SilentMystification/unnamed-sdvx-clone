@@ -41,6 +41,10 @@ namespace Graphics
 		void SetViewport(Recti vp);
 		void MakeCurrent();
 		void ReleaseCurrent();
+		// Call whenever the window's position, size, or visibility changes - see
+		// WindowGLContext::UpdateDrawable for why (a no-op on most backends, but required
+		// on Carbon/AGL).
+		void OnWindowMoved();
 
 		// Check if the calling thread is the thread that runs this OpenGL context
 		[[nodiscard]]

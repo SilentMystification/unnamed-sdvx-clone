@@ -173,10 +173,10 @@ bool Path::CreateDirRecursive(String path)
 
 bool Path::ClearDir(const String& path)
 {
-	Vector<FileInfo> files = Files::ScanFiles(path);
+	Vector<USCFileInfo> files = Files::ScanFiles(path);
 	for(auto& file : files)
 	{
-		if(file.type == FileType::Folder)
+		if(file.type == USCFileType::Folder)
 		{
 			if(!DeleteDir(file.fullPath))
 				return false;
@@ -201,12 +201,12 @@ bool Path::CopyDir(String srcFolder, String dstFolder)
 	if(!CreateDir(dstFolder))
 		return false;
 
-	Vector<FileInfo> files = Files::ScanFiles(srcFolder);
+	Vector<USCFileInfo> files = Files::ScanFiles(srcFolder);
 	for(auto& file : files)
 	{
 		String commonPath = RemoveBase(file.fullPath, srcFolder);
 		String dstPath = dstFolder + Path::sep + commonPath;
-		if(file.type == FileType::Folder)
+		if(file.type == USCFileType::Folder)
 		{
 			if(!CopyDir(file.fullPath, dstPath))
 				return false;

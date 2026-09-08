@@ -1453,7 +1453,7 @@ public:
 	ChartIndex* GetRandomChart()
 	{
 		auto it = m_charts.begin();
-		uint32 selection = Random::IntRange(0, (int32)m_charts.size() - 1);
+		uint32 selection = RandomUtil::IntRange(0, (int32)m_charts.size() - 1);
 		std::advance(it, selection);
 		return it->second;
 	}
@@ -1882,9 +1882,9 @@ private:
 	// Main search thread
 	void m_SearchThread()
 	{
-		Map<String, FileInfo> fileList;
-		Map<String, FileInfo> challengeFileList;
-		Map<String, FileInfo> legacyChallengeFileList;
+		Map<String, USCFileInfo> fileList;
+		Map<String, USCFileInfo> challengeFileList;
+		Map<String, USCFileInfo> legacyChallengeFileList;
 		{
 			ProfilerScope $("Chart Database - Enumerate Files and Charts");
 			m_outer.OnSearchStatusUpdated.Call("[START] Chart Database - Enumerate Files and Folders");
@@ -1894,18 +1894,18 @@ private:
 				exts[0] = "ksh";
 				exts[1] = "chal";
 				exts[2] = "kco";
-				Map<String, Vector<FileInfo>> files = Files::ScanFilesRecursive(rootSearchPath, exts, &m_interruptSearch);
+				Map<String, Vector<USCFileInfo>> files = Files::ScanFilesRecursive(rootSearchPath, exts, &m_interruptSearch);
 				if(m_interruptSearch)
 					return;
-				for(FileInfo& fi : files["ksh"])
+				for(USCFileInfo& fi : files["ksh"])
 				{
 					fileList.Add(fi.fullPath, fi);
 				}
-				for(FileInfo& fi : files["chal"])
+				for(USCFileInfo& fi : files["chal"])
 				{
 					challengeFileList.Add(fi.fullPath, fi);
 				}
-				for(FileInfo& fi : files["kco"])
+				for(USCFileInfo& fi : files["kco"])
 				{
 					legacyChallengeFileList.Add(fi.fullPath, fi);
 				}
@@ -2077,7 +2077,7 @@ private:
 				{
 					// If we already did a convert, check if the kco has been updated
 					uint64 mylwt = f.second.lastWriteTime;
-					FileInfo* conv = challengeFileList.Find(newName);
+					USCFileInfo* conv = challengeFileList.Find(newName);
 					if (conv != nullptr && conv->lastWriteTime >= mylwt)
 					{
 						// No update
@@ -2126,10 +2126,10 @@ private:
 				for (String rootSearchPath : m_searchPaths)
 				{
 					challengeFileList.clear();
-					Vector<FileInfo> files = Files::ScanFilesRecursive(rootSearchPath, "chal", &m_interruptSearch);
+					Vector<USCFileInfo> files = Files::ScanFilesRecursive(rootSearchPath, "chal", &m_interruptSearch);
 					if (m_interruptSearch)
 						return;
-					for (FileInfo& fi : files)
+					for (USCFileInfo& fi : files)
 					{
 						challengeFileList.Add(fi.fullPath, fi);
 					}

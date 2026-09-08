@@ -190,7 +190,7 @@ public:
 		if (m_randomVec.size() == 1) {
 			itemIndex = m_randomVec.back();
 		} else {
-			uint32 selection = Random::IntRange(0, static_cast<int32>(m_randomVec.size()) - 1);
+			uint32 selection = RandomUtil::IntRange(0, static_cast<int32>(m_randomVec.size()) - 1);
 			itemIndex = m_randomVec.at(selection);
 			m_randomVec[selection] = m_randomVec.back();
 		}

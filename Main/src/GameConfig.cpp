@@ -87,7 +87,20 @@ void GameConfig::InitDefaults()
 	Set(GameConfigKeys::GaugeDrainHalf, 300);
 	Set(GameConfigKeys::ModSpeed, 300.0f);
 	Set(GameConfigKeys::AutoSaveSpeed, true);
+#ifdef USC_GL1_LEGACY
+	// This target's executable lives 2 directories deep inside the .app bundle
+	// (usc-game.app/Contents/MacOS/usc-game) and Path::Absolute() resolves relative paths
+	// against that executable directory - so the plain "songs" default every other
+	// platform uses would put the song folder INSIDE the bundle itself
+	// (Contents/MacOS/songs), which is the wrong place for user content: every time the
+	// .app gets replaced/updated, that folder goes with it. Three levels up from
+	// Contents/MacOS/ (MacOS -> Contents -> usc-game.app -> its parent directory) puts it
+	// as a sibling of the .app instead, matching every other platform's convention of
+	// "songs next to the executable/install location", not nested inside a bundle.
+	Set(GameConfigKeys::SongFolder, "../../../songs");
+#else
 	Set(GameConfigKeys::SongFolder, "songs");
+#endif
 	Set(GameConfigKeys::Skin, "Default");
 	Set(GameConfigKeys::Laser0Color, 200.0f);
 	Set(GameConfigKeys::Laser1Color, 330.0f);

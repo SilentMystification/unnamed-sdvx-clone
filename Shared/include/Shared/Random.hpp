@@ -3,7 +3,7 @@
 /*
 	Simple random number generation
 */
-namespace Random
+namespace RandomUtil
 {
 	[[nodiscard]]
 	float Float();

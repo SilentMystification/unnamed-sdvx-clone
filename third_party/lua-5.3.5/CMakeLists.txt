@@ -42,3 +42,11 @@ target_include_directories(lua PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 if(UNIX)
     target_compile_definitions(lua PUBLIC LUA_USE_POSIX)
 endif()
+if(APPLE)
+    # lprefix.h (lua's own, included first in every lua .c file) unconditionally defines
+    # _XOPEN_SOURCE 600, which on the old 10.4 SDK's headers ends up hiding gmtime_r/
+    # localtime_r entirely (even with _DARWIN_C_SOURCE also defined - empirically
+    # verified, not just theorized). lprefix.h documents this exact escape hatch itself:
+    # "-D_XOPEN_SOURCE=0 to undefine it", which restores full Darwin POSIX visibility.
+    target_compile_definitions(lua PUBLIC _XOPEN_SOURCE=0)
+endif()

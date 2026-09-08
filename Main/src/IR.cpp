@@ -99,7 +99,8 @@ namespace IR {
 
         return cpr::PostAsync(cpr::Url{host},
                               CommonHeader(),
-                              cpr::Body{json.dump()});
+                              cpr::Body{json.dump()},
+                              cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
     }
 
     cpr::AsyncResponse Heartbeat()
@@ -107,7 +108,8 @@ namespace IR {
         String host = g_gameConfig.GetString(GameConfigKeys::IRBaseURL);
 
         return cpr::GetAsync(cpr::Url{host},
-                             CommonHeader());
+                             CommonHeader(),
+                             cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
     }
 
     cpr::AsyncResponse ChartTracked(String chartHash)
@@ -115,7 +117,8 @@ namespace IR {
         String host = g_gameConfig.GetString(GameConfigKeys::IRBaseURL) + "/charts/" + chartHash;
 
         return cpr::GetAsync(cpr::Url{host},
-                             CommonHeader());
+                             CommonHeader(),
+                             cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
     }
 
     cpr::AsyncResponse Record(String chartHash)
@@ -123,7 +126,8 @@ namespace IR {
         String host = g_gameConfig.GetString(GameConfigKeys::IRBaseURL) + "/charts/" + chartHash + "/record";
 
         return cpr::GetAsync(cpr::Url{host},
-                             CommonHeader());
+                             CommonHeader(),
+                             cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
     }
 
     cpr::AsyncResponse Leaderboard(String chartHash, String mode, int n)
@@ -133,7 +137,8 @@ namespace IR {
         return cpr::GetAsync(cpr::Url{host},
                              cpr::Header{{"Authorization", "Bearer " + g_gameConfig.GetString(GameConfigKeys::IRToken)}}, //can't give the json header here so whatever
                              cpr::Parameters{{"mode", mode},
-                                             {"n", std::to_string(n)}});
+                                             {"n", std::to_string(n)}},
+                             cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
     }
 
     void PostReplay(String identifier, String replayPath)

@@ -117,7 +117,20 @@ public:
 		}
 		else
 		{
-			// Create DB 
+			// TODO(ppc-verify): remove once real hardware confirms/rules out why this branch
+			// (and the subsequent full rebuild/rescan) fires on every launch instead of just
+			// the first - maps.db itself demonstrably persists between launches (non-trivial
+			// file size), but this version-table lookup fails every time regardless, which
+			// forces m_CreateTables() below to DROP and rebuild Folders/Charts/Scores/
+			// Collections from scratch every launch (that function's own DROP TABLE IF
+			// EXISTS calls, not something new here) - i.e. the "song directory rescanned
+			// every time" behavior. Logging the databasePath actually opened and whether
+			// versionQuery itself was even valid, to distinguish "wrong/inconsistent path
+			// across launches" from "this specific write never survives" (e.g. a FAT32/
+			// journal durability gap for this one table specifically).
+			Logf("MapDatabase: version table lookup failed (path=\"%s\", statement valid=%d) - triggering full rebuild",
+				Logger::Severity::Warning, databasePath.c_str(), (int)(bool)versionQuery);
+			// Create DB
 			m_database.Exec("DROP TABLE IF EXISTS Database");
 			m_database.Exec("CREATE TABLE Database(version INTEGER)");
 			m_database.Exec(Utility::Sprintf("INSERT OR REPLACE INTO Database(rowid, version) VALUES(1, %d)", m_version));

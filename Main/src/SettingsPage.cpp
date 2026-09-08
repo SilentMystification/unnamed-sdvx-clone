@@ -660,6 +660,23 @@ static inline bool HitCheck(const struct nk_rect& rect, const Vector2i& pos)
 
 static inline void RenderButton(NVGcontext* vg, const struct nk_rect& rect, bool forcePortrait, Ref<TextRes> textRes, bool activated, const Vector2i& mousePos)
 {
+	// TODO(ppc-verify): remove once real hardware confirms/rules out a degenerate text mesh
+	// as the cause of "tabs render blank, same as song select title" - logged once per
+	// distinct TextRes since this runs every frame for every tab header. Font::AddCharInfo's
+	// missing-glyph warning and gfx.CreateLabel's zero-font-size warning have both already
+	// been checked on hardware and neither fired for this text, so the failure (if real) is
+	// somewhere between a valid-looking TextRes and what actually reaches the screen - this
+	// narrows it further by confirming whether the mesh itself is non-empty at draw time.
+	{
+		static std::set<const void*> loggedTextRes;
+		if (loggedTextRes.insert(textRes.get()).second)
+		{
+			Ref<MeshRes> mesh = textRes->GetMesh();
+			Logf("SettingsPage tab text: size=(%.1f,%.1f,%.1f) mesh=%s", Logger::Severity::Warning,
+				textRes->size.x, textRes->size.y, textRes->size.z, mesh ? "valid" : "NULL");
+		}
+	}
+
 	float scaleX = 1.0f;
 
 	nvgResetTransform(vg);

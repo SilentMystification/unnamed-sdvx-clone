@@ -196,6 +196,28 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
             // handed to GL directly as draw-time pointers.
             GLsizei vs = (GLsizei)sizeof(struct nk_gl1_vertex);
 
+            // TODO(ppc-verify): defensive, remove once real hardware confirms which of
+            // these ends up 0/invalid and why. A real crash (EXC_BAD_ACCESS at 0x0 in
+            // gleDrawArraysOrElements_IMM_Exec, called directly from this function) shows
+            // the driver falling back to immediate/client-array mode - only possible if
+            // glBindBuffer below is binding buffer id 0, i.e. dev->vertexBuffer/elementBuffer
+            // itself was invalid at this point. glGenBuffers should never hand back 0, so
+            // this self-heals (regenerates) rather than crashing, and logs once (Warning -
+            // Info is filtered out on this build, see Logger::Log()'s severity gate) so the
+            // next hardware log confirms whether this path is actually hit.
+            if (!dev->vertexBuffer || !dev->elementBuffer)
+            {
+                static bool loggedBadNkBuffers = false;
+                if (!loggedBadNkBuffers)
+                {
+                    Logf("nk_sdl_render: vertexBuffer=%d elementBuffer=%d before bind - regenerating",
+                        Logger::Severity::Warning, (int)dev->vertexBuffer, (int)dev->elementBuffer);
+                    loggedBadNkBuffers = true;
+                }
+                if (!dev->vertexBuffer) glGenBuffers(1, &dev->vertexBuffer);
+                if (!dev->elementBuffer) glGenBuffers(1, &dev->elementBuffer);
+            }
+
             glBindBuffer(GL_ARRAY_BUFFER, dev->vertexBuffer);
             glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)max_vertex_buffer, dev->vertex_mem, GL_STREAM_DRAW);
             glVertexPointer(2, GL_FLOAT, vs, (const void*)offsetof(struct nk_gl1_vertex, position));

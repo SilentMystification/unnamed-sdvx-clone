@@ -714,7 +714,8 @@ void __updateChecker()
 	ProfilerScope $1("Check for updates");
 	if (channel == "release")
 	{
-		auto r = cpr::Get(cpr::Url{"https://api.github.com/repos/drewol/unnamed-sdvx-clone/releases/latest"});
+		auto r = cpr::Get(cpr::Url{"https://api.github.com/repos/drewol/unnamed-sdvx-clone/releases/latest"},
+			cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
 
 		Logf("Update check status code: %d", Logger::Severity::Normal, r.status_code);
 		if (r.status_code != 200)
@@ -763,7 +764,8 @@ void __updateChecker()
 	else
 	{
 #ifdef GIT_COMMIT
-		auto response = cpr::Get(cpr::Url{"https://api.github.com/repos/drewol/unnamed-sdvx-clone/actions/runs"});
+		auto response = cpr::Get(cpr::Url{"https://api.github.com/repos/drewol/unnamed-sdvx-clone/actions/runs"},
+			cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
 		if (response.status_code != 200)
 		{
 			Logf("Failed to get update information: %s", Logger::Severity::Error, response.error.message.c_str());
@@ -810,7 +812,8 @@ void __updateChecker()
 				}
 				else //update available
 				{
-					auto response = cpr::Get(cpr::Url{"https://api.github.com/repos/drewol/unnamed-sdvx-clone/commits/" + new_hash});
+					auto response = cpr::Get(cpr::Url{"https://api.github.com/repos/drewol/unnamed-sdvx-clone/commits/" + new_hash},
+						cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
 					String updateUrl = "https://github.com/drewol/unnamed-sdvx-clone";
 					if (response.status_code != 200)
 					{
@@ -1410,7 +1413,17 @@ void Application::m_MainLoop()
 
 
 
-		m_deltaTime = m_frameTimer.SecondsAsFloat();
+		// Clamped to prevent any single stall (an AsyncFinalize job doing synchronous file
+		// I/O/Lua/GL work above, a slow chart-loading job, an OS scheduling hiccup) from
+		// being handed to every tickable's next Tick()/Render() as a huge, unclamped
+		// deltaTime. Without this, a multi-second stall collapses purely time-based Lua
+		// timers - e.g. TransitionScreen's fade and the gameplay skin's 2-second
+		// render_intro() countdown that gates when audio/judging starts - to zero in a
+		// single frame, so the moment a stall ends, gameplay snaps straight to fully active
+		// with no perceptible transition. Standard "max delta time" technique; 100ms still
+		// reads as a real elapsed frame to every consumer below (avg FPS, input timing,
+		// tickable animation) without letting a stall masquerade as legitimate game time.
+		m_deltaTime = Math::Min(m_frameTimer.SecondsAsFloat(), 0.1f);
 	}
 }
 
@@ -3063,7 +3076,7 @@ bool JacketLoadingJob::Run()
 	// Create loading task
 	if (web)
 	{
-		auto response = cpr::Get(cpr::Url(imagePath));
+		auto response = cpr::Get(cpr::Url(imagePath), cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
 		if (response.error.code != cpr::ErrorCode::OK || response.status_code >= 300)
 		{
 			return false;
@@ -3100,7 +3113,20 @@ void JacketLoadingJob::Finalize()
 	{
 		///TODO: Maybe do the nvgCreateImage in Run() instead
 		target->texture = nvgCreateImageRGBA(g_guiState.vg, loadedImage->GetSize().x, loadedImage->GetSize().y, 0, (unsigned char *)loadedImage->GetBits());
-		target->loaded = true;
+		// nvgCreateImageRGBA can legitimately return 0 (GL texture creation failure) - this
+		// was never checked, so target->loaded got set true regardless, handing Lua a
+		// texture id of 0 as if it were valid. 0 is truthy in Lua, so gfx.LoadImageJob's
+		// caller (songwheel.lua) would still call gfx.ImageRect with it - nvgImageSize
+		// can't find a size for a nonexistent id 0, and nvg's paint setup then silently
+		// falls back to a flat-color fill instead of the jacket texture. No prior log
+		// covered this path (only file-open/decode failures were logged, not GL upload
+		// failure) - real hardware showed jackets simply not appearing with no error.
+		if (target->texture == 0)
+		{
+			Logf("JacketLoadingJob: nvgCreateImageRGBA failed for \"%s\" (%dx%d)", Logger::Severity::Warning,
+				imagePath.c_str(), loadedImage->GetSize().x, loadedImage->GetSize().y);
+		}
+		target->loaded = (target->texture != 0);
 	}
 }
 

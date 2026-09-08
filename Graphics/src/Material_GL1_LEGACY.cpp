@@ -55,12 +55,31 @@ namespace Graphics
 
 		bool hasTexture = false;
 		bool hasColor = false;
+		bool hasMapSize = false;
 		Vector4 color(1.0f, 1.0f, 1.0f, 1.0f);
+		Vector2i mapSize;
 
 		for(auto p : params)
 		{
 			switch(p.second.parameterType)
 			{
+			case GL_INT_VEC2:
+				// "mapSize" (font.fs's spritemap-atlas-pixel-size uniform, set by
+				// RenderQueue::Draw/DrawScissored(...TextRes...)) is the only GL_INT_VEC2
+				// parameter in use. TextRes meshes carry texcoords in raw atlas-pixel units
+				// (Font.cpp), relying on the fragment shader to do `fsTex / mapSize` -
+				// GL1_LEGACY has no shader, so without this every glyph's texcoords went
+				// through unnormalized (e.g. (37,0)-(52,18) into a 128x64 atlas), clamped to
+				// the atlas edge texel by its Clamp,Clamp wrap mode. Confirmed on real
+				// hardware as title/tab text either missing or rendering wrong depending on
+				// what happened to sit at that atlas's clamped corner. Applied as a texture
+				// matrix scale below (the fixed-function equivalent of the shader division).
+				if(p.first == "mapSize")
+				{
+					mapSize = p.second.Get<Vector2i>();
+					hasMapSize = true;
+				}
+				break;
 			case GL_SAMPLER_2D:
 			{
 				// No fixed-function equivalent for compositing multiple textures (masks,
@@ -108,6 +127,15 @@ namespace Graphics
 			glColor4fv(&color.x);
 		else
 			glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+		// Always reset to identity first - every other mesh in this codebase (sprites, track
+		// geometry, nvg/nuklear's own draws) already supplies normalized [0,1] texcoords and
+		// must not inherit a stale scale left over from a previous TextRes draw this frame.
+		glMatrixMode(GL_TEXTURE);
+		glLoadIdentity();
+		if(hasMapSize && mapSize.x > 0 && mapSize.y > 0)
+			glScalef(1.0f / (float)mapSize.x, 1.0f / (float)mapSize.y, 1.0f);
+		glMatrixMode(GL_MODELVIEW);
 	}
 
 	void Material_Impl::BindToContext()

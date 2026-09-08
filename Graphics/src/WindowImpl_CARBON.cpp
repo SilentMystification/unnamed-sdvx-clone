@@ -326,6 +326,16 @@ namespace Graphics
 			return false;
 		}
 
+		// kEventParamMouseLocation is global screen coordinates; nuklear (via synthesized
+		// SDL_Event motion/button coords) needs window-local, same conversion Window::GetMousePos
+		// below already does via GetGlobalMouse+GetWindowBounds.
+		static Vector2i GlobalToLocal(WindowRef window, Vector2i globalPos)
+		{
+			Rect bounds;
+			GetWindowBounds(window, kWindowContentRgn, &bounds);
+			return Vector2i(globalPos.x - bounds.left, globalPos.y - bounds.top);
+		}
+
 		// Carbon Event Manager pump. Translates native events into the same
 		// SDL_Scancode/SDL_Event-shaped calls WindowImpl_SDL2.cpp makes, so every
 		// downstream consumer of Window's delegates is unaffected by the backend.
@@ -401,16 +411,20 @@ namespace Graphics
 							}
 						}
 
+						Point buttonQdPt;
+						bool haveButtonQdPt = GetEventParameter(event, kEventParamMouseLocation, typeQDPoint, nullptr, sizeof(buttonQdPt), nullptr, &buttonQdPt) == noErr;
+
 						EventMouseButton button = 0;
 						GetEventParameter(event, kEventParamMouseButton, typeMouseButton, nullptr, sizeof(button), nullptr, &button);
 
 						MouseButton mb;
+						Uint8 sdlButton = 0;
 						bool known = true;
 						switch(button)
 						{
-						case kEventMouseButtonPrimary: mb = MouseButton::Left; break;
-						case kEventMouseButtonSecondary: mb = MouseButton::Right; break;
-						case kEventMouseButtonTertiary: mb = MouseButton::Middle; break;
+						case kEventMouseButtonPrimary: mb = MouseButton::Left; sdlButton = SDL_BUTTON_LEFT; break;
+						case kEventMouseButtonSecondary: mb = MouseButton::Right; sdlButton = SDL_BUTTON_RIGHT; break;
+						case kEventMouseButtonTertiary: mb = MouseButton::Middle; sdlButton = SDL_BUTTON_MIDDLE; break;
 						default: known = false; break;
 						}
 						if(known)
@@ -419,6 +433,26 @@ namespace Graphics
 								outer.OnMousePressed.Call(mb);
 							else
 								outer.OnMouseReleased.Call(mb);
+
+							// nuklear (settings/config/calibration screens) only receives input
+							// through outer.OnAnyEvent - see GuiUtils.cpp's
+							// BasicNuklearGui::UpdateNuklearInput. That was never fed on this
+							// backend (only WindowImpl_SDL2.cpp called it), so nuklear never saw
+							// clicks, hover, drag, or scroll - confirmed on real hardware as
+							// "cannot scroll in the settings menus on any tab". Synthesize the
+							// SDL_Event shape nk_sdl_handle_event expects (nuklear_gl1.h) so
+							// mouse input reaches it same as the SDL2 backend.
+							if(haveButtonQdPt)
+							{
+								Vector2i localPos = GlobalToLocal(m_window, Vector2i((int32)buttonQdPt.h, (int32)buttonQdPt.v));
+								SDL_Event sdlEvt = {};
+								sdlEvt.type = (eventKind == kEventMouseDown) ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+								sdlEvt.button.button = sdlButton;
+								sdlEvt.button.x = localPos.x;
+								sdlEvt.button.y = localPos.y;
+								sdlEvt.button.clicks = 1;
+								outer.OnAnyEvent.Call(sdlEvt);
+							}
 						}
 					}
 					else if(eventKind == kEventMouseMoved || eventKind == kEventMouseDragged)
@@ -435,6 +469,16 @@ namespace Graphics
 							}
 							m_lastMousePos = pos;
 							m_haveLastMousePos = true;
+
+							// See kEventMouseDown/Up above - nuklear needs absolute, window-local
+							// motion coordinates (nk_input_motion via SDL_MOUSEMOTION), not the
+							// relative deltas OnMouseMotion delivers.
+							Vector2i localPos = GlobalToLocal(m_window, pos);
+							SDL_Event sdlEvt = {};
+							sdlEvt.type = SDL_MOUSEMOTION;
+							sdlEvt.motion.x = localPos.x;
+							sdlEvt.motion.y = localPos.y;
+							outer.OnAnyEvent.Call(sdlEvt);
 						}
 					}
 					else if(eventKind == kEventMouseWheelMoved)
@@ -448,6 +492,17 @@ namespace Graphics
 							// TODO(ppc-verify): sign convention not checked against real
 							// hardware - matches SDL2 backend's non-"flipped" case.
 							outer.OnMouseScroll.Call(-(int32)delta);
+
+							// See kEventMouseDown/Up above - this is the actual fix for "cannot
+							// scroll in settings": nuklear's nk_input_scroll is only ever called
+							// from nk_sdl_handle_event's SDL_MOUSEWHEEL branch, which was never
+							// reached on this backend.
+							SDL_Event sdlEvt = {};
+							sdlEvt.type = SDL_MOUSEWHEEL;
+							sdlEvt.wheel.x = 0;
+							sdlEvt.wheel.y = -(int32)delta;
+							sdlEvt.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
+							outer.OnAnyEvent.Call(sdlEvt);
 						}
 					}
 				}

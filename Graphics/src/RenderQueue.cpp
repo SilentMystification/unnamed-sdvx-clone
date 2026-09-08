@@ -192,6 +192,23 @@ namespace Graphics
 		glDisable(GL_BLEND);
 		glDisable(GL_SCISSOR_TEST);
 
+#ifdef USC_GL1_LEGACY
+		// Material_GL1_LEGACY.cpp's BindParameters scales GL_TEXTURE for TextRes draws
+		// (mapSize) and resets it to identity for every other draw's own BindParameters call -
+		// but that reset only happens on the NEXT BindParameters call, which may not come
+		// until a later frame. Anything that draws outside this class entirely (nvg, nuklear)
+		// never touches GL_TEXTURE itself and assumes it's always identity - if a text draw's
+		// leftover scale is still active when one of those runs (extremely likely: they often
+		// run right after this Process() call, sometimes not until next frame), every texture
+		// they sample gets scaled too, e.g. reading only the extreme corner of an unrelated
+		// image. Confirmed on real hardware as a regression: main menu going mostly white,
+		// settings text reverting to opaque boxes. Force identity back on unconditionally
+		// before this function ever returns control to the rest of the frame.
+		glMatrixMode(GL_TEXTURE);
+		glLoadIdentity();
+		glMatrixMode(GL_MODELVIEW);
+#endif
+
 		if(clearQueue)
 		{
 			Clear();
@@ -225,6 +242,14 @@ namespace Graphics
 		sdc->params = params;
 		// Set Font texture map
 		sdc->params.SetParameter("mainTex", text->GetTexture());
+		// TextRes meshes carry texcoords in raw atlas-pixel units (see Font.cpp), not [0,1] -
+		// font.fs's fragment shader does `fsTex / mapSize` itself, but that division only
+		// happens if mapSize is actually supplied. DrawScissored (below) already set this;
+		// this plain overload didn't, silently leaving text drawn through it (e.g.
+		// SettingsPage.cpp's RenderButton, used for the settings tab headers) sampling
+		// unnormalized/clamped texcoords - real hardware confirmed this specific overload
+		// is what settings tab labels use, and they render blank.
+		sdc->params.SetParameter("mapSize", text->GetTexture()->GetSize());
 		sdc->worldTransform = worldTransform;
 		m_orderedCommands.push_back(sdc);
 	}

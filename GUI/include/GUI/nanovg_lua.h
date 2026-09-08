@@ -310,6 +310,27 @@ static int lText(lua_State* L /*const char* s, float x, float y*/)
 	s = luaL_checkstring(L, 1);
 	x = luaL_checknumber(L, 2);
 	y = luaL_checknumber(L, 3);
+
+	// TODO(ppc-verify): remove once real hardware confirms/rules out what's actually
+	// happening to the gauge "%" readout (reported as horizontally mirrored - user
+	// confirmed it's specifically this text, not the gauge art). This is plain nvgText -
+	// identical, generic code path used by combo/earlate text which reportedly render fine
+	// - the only functional difference is TEXT_ALIGN_RIGHT vs CENTER. Static review of
+	// nvgText/fontstash's alignment math (nanovg.c, fontstash.h) found the RIGHT-align path
+	// structurally correct (just an x-offset by the pre-measured width, same mechanism as
+	// CENTER), so logging the actual measured bounds/align state to see what's really being
+	// computed on real hardware rather than guessing further. Filtered to short strings
+	// containing '%' to isolate this one call site without spamming every other gfx.Text
+	// call in the game.
+	if (strchr(s, '%') != nullptr && strlen(s) <= 8)
+	{
+		float bounds[4] = { 0,0,0,0 };
+		float measuredWidth = nvgTextBounds(g_guiState.vg, x, y, s, NULL, bounds);
+		Logf("gfx.Text \"%s\" at (%.1f,%.1f) align=0x%X measuredWidth=%.1f bounds=(%.1f,%.1f,%.1f,%.1f)",
+			Logger::Severity::Warning, s, x, y, g_guiState.textAlign, measuredWidth,
+			bounds[0], bounds[1], bounds[2], bounds[3]);
+	}
+
 	nvgText(g_guiState.vg, x, y, s, NULL);
 
 	//{ //Fast text

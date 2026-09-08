@@ -164,4 +164,19 @@ if(APPLE)
             COMMENT "Copying ${resourceDir} into the .app bundle"
         )
     endforeach()
+
+    # mbedTLS (this backend's SSL backend, see third_party/CMakeLists.txt) has no OS
+    # keychain integration, unlike Secure Transport - it needs an actual CA bundle file to
+    # validate certs against, or every HTTPS request fails cert verification (confirmed on
+    # real hardware: "Cert verify failed: BADCERT_NOT_TRUSTED"). Bundled flat next to the
+    # executable like every other resource here; cpr calls point CAINFO at
+    # Path::Absolute("cacert.pem") - see Main/src/Application.cpp/SkinHttp.cpp/IR.cpp/
+    # DownloadScreen.cpp. Source: https://curl.se/ca/cacert.pem (curl's own official Mozilla
+    # CA bundle export) - re-fetch periodically as certs expire/rotate.
+    add_custom_command(TARGET usc-game POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${PROJECT_SOURCE_DIR}/bin/cacert.pem"
+            "$<TARGET_FILE_DIR:usc-game>/cacert.pem"
+        COMMENT "Copying cacert.pem into the .app bundle"
+    )
 endif()

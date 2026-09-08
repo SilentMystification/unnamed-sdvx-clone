@@ -154,6 +154,22 @@ static inline int usc_nk_font_bake_pack(struct nk_font_baker* baker,
     return nk_true;
 }
 
+/// nk_font_bake_convert, but writes explicit RGBA bytes instead of packing a native-endian
+/// 32-bit int ((alpha << 24) | 0x00FFFFFF) and relying on glTexImage2D to reread its memory
+/// layout as R,G,B,A. That packing only produces the right byte order on little-endian hosts;
+/// on big-endian PPC the alpha byte ends up first in memory, so GL_RGBA reads R=alpha (varying
+/// per glyph pixel) and G=B=A=0xFF (always opaque) - every glyph renders as a solid box.
+static inline void usc_nk_font_bake_convert(void* out_memory, int img_width, int img_height,
+    const void* in_memory)
+{
+    nk_byte* dst = (nk_byte*)out_memory;
+    const nk_byte* src = (const nk_byte*)in_memory;
+    for (long n = (long)img_width * (long)img_height; n > 0; --n) {
+        nk_byte a = *src++;
+        *dst++ = 0xFF; *dst++ = 0xFF; *dst++ = 0xFF; *dst++ = a;
+    }
+}
+
 /// nk_font_atlas_bake but calls usc_nk_font_bake_pack
 static inline const void* usc_nk_font_atlas_bake(struct nk_font_atlas* atlas, int* width, int* height,
     enum nk_font_atlas_format fmt)
@@ -224,7 +240,7 @@ static inline const void* usc_nk_font_atlas_bake(struct nk_font_atlas* atlas, in
             (nk_size)(*width * *height * 4));
         NK_ASSERT(img_rgba);
         if (!img_rgba) goto failed;
-        nk_font_bake_convert(img_rgba, *width, *height, atlas->pixel);
+        usc_nk_font_bake_convert(img_rgba, *width, *height, atlas->pixel);
         atlas->temporary.free(atlas->temporary.userdata, atlas->pixel);
         atlas->pixel = img_rgba;
     }
@@ -384,8 +400,16 @@ nk_sdl_device_destroy_keep_font(void)
 {
     auto* dev = &sdl.ogl;
 #ifdef USC_GL1_LEGACY
-    // No shader program/VBO/EBO on this backend (see nuklear_gl1.h) - just the CPU-side
-    // scratch buffers nk_sdl_render() (re)allocates each frame.
+    // This backend DOES have a real VBO/EBO (nk_gl1_device::vertexBuffer/elementBuffer,
+    // nuklear_gl1.h) - this comment/branch predates that conversion and used to only free
+    // the CPU-side scratch buffers, leaking the GL buffer objects on every settings-close.
+    // A real hardware crash (EXC_BAD_ACCESS at 0x0 in gleDrawArraysOrElements_IMM_Exec,
+    // called from nk_sdl_render) is consistent with a stale/invalid buffer id surviving a
+    // shutdown+reinit cycle - delete them explicitly here so nk_sdl_device_create's next
+    // glGenBuffers always starts from a clean, known state.
+    glDeleteBuffers(1, &dev->vertexBuffer);
+    glDeleteBuffers(1, &dev->elementBuffer);
+    dev->vertexBuffer = dev->elementBuffer = 0;
     free(dev->vertex_mem);
     free(dev->element_mem);
     dev->vertex_mem = dev->element_mem = NULL;

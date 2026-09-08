@@ -148,6 +148,11 @@ private:
 	// Current background visualization
 	Background* m_background = nullptr;
 	Background* m_foreground = nullptr;
+	// Background/foreground script resolution + bytes, read ahead of time on AsyncLoad's
+	// worker thread (see PrefetchBackgroundScript) so CreateBackground's own Init() in
+	// AsyncFinalize doesn't have to do that same disk I/O synchronously on the main thread.
+	BackgroundScriptPrefetch m_bgPrefetch;
+	BackgroundScriptPrefetch m_fgPrefetch;
 
 	// Lua state
 	lua_State* m_lua = nullptr;
@@ -297,6 +302,18 @@ public:
 		{
 			Log("Failed to load map", Logger::Severity::Warning);
 			return false;
+		}
+
+		// Resolve and read the background/foreground scripts now, on this worker thread,
+		// instead of leaving that disk I/O for AsyncFinalize to do synchronously on the
+		// main thread later (see CreateBackground below and Background.hpp). The chart's
+		// background layer setting is already available on m_beatmap right here, which is
+		// what makes this possible without running any Lua or touching GL.
+		if (!g_gameConfig.GetBool(GameConfigKeys::DisableBackgrounds))
+		{
+			const String& layerSetting = m_beatmap->GetMapSettings().foregroundPath;
+			m_bgPrefetch = PrefetchBackgroundScript(m_chartRootPath, layerSetting, false);
+			m_fgPrefetch = PrefetchBackgroundScript(m_chartRootPath, layerSetting, true);
 		}
 
 		// Enable debug functionality
@@ -580,12 +597,13 @@ public:
 		if (m_multiplayer != nullptr)
 			m_multiplayer->GetTCP().PushFunctions(m_lua);
 
-		// Background 
-		/// TODO: Load this async
+		// Background - script resolution + file read already done on AsyncLoad's worker
+		// thread (see m_bgPrefetch/m_fgPrefetch above); this now only runs Lua and creates
+		// GL resources, which must stay on the main thread.
 		if (!g_gameConfig.GetBool(GameConfigKeys::DisableBackgrounds))
 		{
-			m_background = CreateBackground(this);
-			m_foreground = CreateBackground(this, true);
+			m_background = CreateBackground(this, false, &m_bgPrefetch);
+			m_foreground = CreateBackground(this, true, &m_fgPrefetch);
 		}
 
 		// Do this here so we don't get input events while still loading
@@ -958,11 +976,17 @@ public:
 		RenderQueue fxHoldObjectsRq(g_gl, rs);
 		RenderQueue hitObjectsTrackCoverRq(g_gl, rs);
 
+		// Draw the base track + time division ticks first - both this and DrawLaserBase
+		// below insert into the same renderQueue, processed with no depth test on the
+		// GL1_LEGACY backend (RenderQueue::Process() has no per-pixel depth resolution,
+		// just strict insertion order - "painter's algorithm"). DrawLaserBase used to be
+		// inserted first, meaning the opaque track base painted over the lasers wherever
+		// they overlapped - confirmed on real PPC/G4 hardware as "lasers peeking out from
+		// behind the lane". Track base belongs on the bottom, lasers on top of it.
+		m_track->DrawBase(renderQueue);
+
 		/// TODO: Performance impact analysis.
 		m_track->DrawLaserBase(renderQueue, m_playback, m_currentObjectSet);
-
-		// Draw the base track + time division ticks
-		m_track->DrawBase(renderQueue);
 
 		for(auto& object : m_currentObjectSet)
 		{
@@ -976,8 +1000,27 @@ public:
 					m_track->DrawObjectState(hitObjectsTrackCoverRq, m_playback, object, m_scoring.IsObjectHeld(object), chipFXTimes);
 			}
 		}
+#ifdef USC_GL1_LEGACY
+		// trackCover.fs computes its ENTIRE alpha procedurally from hiddenCutoff/suddenCutoff
+		// (see the shader - target.a is fully overwritten, never multiplied against the
+		// texture's own alpha) - with Hidden/Sudden off (the default: hiddenCutoff=0,
+		// suddenCutoff=1, set in DoInit above), that math evaluates to ~0 across the whole
+		// track, so this quad is invisible by design on shader-capable backends. GL1 fixed
+		// function can't run that per-pixel computation, so it falls back to the texture's
+		// own stored alpha - confirmed fully opaque (255) in trackCover.png, since the artist
+		// never needed real alpha there. Drawn after every note into this same queue
+		// (hitObjectsTrackCoverRq), that painted an opaque cover over the entire track, every
+		// frame, regardless of whether Hidden/Sudden were even in use - confirmed on real
+		// hardware as notes/lasers not being visible. Skip the draw entirely for the default
+		// (no-effect) case; Hidden/Sudden mods will still be wrong on this backend (no
+		// per-pixel fade), but that's a much narrower, opt-in case than "no notes ever".
+		bool hiddenSuddenActive = m_track->hiddenCutoff > 0.0f || m_track->suddenCutoff < 1.0f;
+		if(m_showCover && hiddenSuddenActive)
+			m_track->DrawTrackCover(hitObjectsTrackCoverRq);
+#else
 		if(m_showCover)
 			m_track->DrawTrackCover(hitObjectsTrackCoverRq);
+#endif
 
 		if (m_renderFastGui || m_renderDebugHUD)
 			m_track->DrawCalibrationCritLine(hitObjectsTrackCoverRq);
@@ -1009,7 +1052,48 @@ public:
 		m_track->DrawOverlays(scoringRq);
 		
 		// Render queues
+#ifdef USC_GL1_LEGACY
+		// TODO(ppc-verify): remove once real hardware confirms/rules out GL state as the
+		// cause of "everything behind the lane again" (lasers/notes reportedly render behind
+		// the lane despite renderQueue.Process() - the lane - running strictly before every
+		// other queue here, with no depth test enabled anywhere in this backend). One-shot,
+		// first gameplay frame only - capturing actual GL state right at this boundary is the
+		// next concrete step now that source-level review of draw order/material/blend state
+		// found nothing wrong.
+		{
+			static bool loggedGameRenderState = false;
+			if (!loggedGameRenderState)
+			{
+				loggedGameRenderState = true;
+				GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+				GLboolean depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+				GLint blendSrc = 0, blendDst = 0, boundTex = 0;
+				glGetIntegerv(GL_BLEND_SRC, &blendSrc);
+				glGetIntegerv(GL_BLEND_DST, &blendDst);
+				glGetIntegerv(GL_TEXTURE_BINDING_2D, &boundTex);
+				Logf("Game render (before lane): blend=%d depth=%d blendSrc=0x%04X blendDst=0x%04X boundTex=%d",
+					Logger::Severity::Warning, (int)blendEnabled, (int)depthEnabled, blendSrc, blendDst, boundTex);
+			}
+		}
+#endif
 		renderQueue.Process();
+#ifdef USC_GL1_LEGACY
+		{
+			static bool loggedAfterLane = false;
+			if (!loggedAfterLane)
+			{
+				loggedAfterLane = true;
+				GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+				GLboolean depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+				GLint blendSrc = 0, blendDst = 0, boundTex = 0;
+				glGetIntegerv(GL_BLEND_SRC, &blendSrc);
+				glGetIntegerv(GL_BLEND_DST, &blendDst);
+				glGetIntegerv(GL_TEXTURE_BINDING_2D, &boundTex);
+				Logf("Game render (after lane, before notes): blend=%d depth=%d blendSrc=0x%04X blendDst=0x%04X boundTex=%d",
+					Logger::Severity::Warning, (int)blendEnabled, (int)depthEnabled, blendSrc, blendDst, boundTex);
+			}
+		}
+#endif
 		fxHoldObjectsRq.Process();
 		hitEffectsRq.Process();
 		hitObjectsTrackCoverRq.Process();

@@ -346,6 +346,28 @@ namespace Graphics
 			ret->mesh->SetData(vertices);
 			ret->mesh->SetPrimitiveType(PrimitiveType::TriangleList);
 
+			// TODO(ppc-verify): remove once real hardware confirms/rules out what's
+			// different about text that doesn't render (song title - artist, created via
+			// the exact same code path/call site, renders fine). Logs every distinct
+			// (string, pixel size) TextRes actually built, once each, so the next hardware
+			// log can be directly diffed - real content, real glyph count that survived the
+			// c!='\n'/'\t'/zero-size-info.coords filter above vs total characters in the
+			// string, and the final mesh vertex count/size. If title's string never even
+			// reaches this log, the break is upstream (Lua/CreateLabel); if it does but with
+			// 0 vertices, the break is per-glyph info.coords lookups; if vertices > 0 but
+			// still doesn't render, the break is downstream of mesh construction.
+			if (nFontSize >= 28)
+			{
+				static std::set<String> loggedTexts;
+				String key = Utility::Sprintf("%d:%s", nFontSize, Utility::ConvertToUTF8(str));
+				if (loggedTexts.insert(key).second)
+				{
+					Logf("Font::CreateText: size=%d str=\"%s\" (%d chars) -> %d vertices, computed size=(%.1f,%.1f,%.1f)",
+						Logger::Severity::Warning, nFontSize, Utility::ConvertToUTF8(str), (int)str.length(),
+						(int)vertices.size(), ret->size.x, ret->size.y, ret->size.z);
+				}
+			}
+
 			Text textObj = Utility::MakeRef(ret);
 			// Insert into cache
 			size->cache.AddText(str, textObj);

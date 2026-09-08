@@ -79,6 +79,22 @@ void ShadedMesh::AddSkinTexture(const String& name, const String& file) {
 
 	auto newTex = g_application->LoadTexture(file);
 	m_textures.Add(key, newTex); // Cache texture
+
+	// TODO(ppc-verify): remove once real hardware confirms/rules out NPOT texture handling
+	// as the cause of the reported horizontally-mirrored gauge - code review (materials,
+	// mesh UVs, projection, wrap mode) found no mirroring bug anywhere in this pipeline, so
+	// the next step is checking whether the actual asset dimensions are power-of-two (some
+	// old fixed-function GL1 drivers mis-sample NPOT textures in ways that can look like a
+	// flip). Logged once per distinct file, gauge-related only to avoid spam.
+	if (newTex && file.find("gauge") != String::npos)
+	{
+		Vector2i size = newTex->GetSize();
+		bool potX = (size.x & (size.x - 1)) == 0;
+		bool potY = (size.y & (size.y - 1)) == 0;
+		Logf("ShadedMesh::AddSkinTexture: \"%s\" is %dx%d (power-of-two: x=%d y=%d)",
+			Logger::Severity::Warning, file.c_str(), size.x, size.y, (int)potX, (int)potY);
+	}
+
 	SetParam(name, newTex);
 }
 

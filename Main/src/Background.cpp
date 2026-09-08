@@ -11,6 +11,56 @@
 #include "Gauge.hpp"
 #include "Shared/LuaBindable.hpp"
 
+BackgroundScriptPrefetch PrefetchBackgroundScript(const String& chartRootPath, const String& foregroundPathSetting, bool foreground)
+{
+	BackgroundScriptPrefetch result;
+	result.fname = foreground ? "fg" : "bg";
+
+	// Mirrors TestBackground::Init's own defaultBGs check below - which folder a chart's
+	// named layer resolves to (skin-provided vs chart-provided) depends on whether the
+	// skin actually has a subfolder for it.
+	Vector<String> defaultBGs = Path::GetSubDirs(Path::Normalize(
+		Path::Absolute("skins/" + g_application->GetCurrentSkin() + "/backgrounds/")));
+
+	String layer;
+	if (!foregroundPathSetting.Split(";", &layer, nullptr))
+		layer = foregroundPathSetting;
+
+	String folderPath;
+	if (defaultBGs.Contains(layer))
+	{
+		folderPath = Path::Absolute("skins/" + g_application->GetCurrentSkin() + Path::sep + "backgrounds" + Path::sep + layer + Path::sep);
+	}
+	else
+	{
+		folderPath = Path::Absolute(chartRootPath + Path::sep + layer + Path::sep);
+	}
+
+	auto tryRead = [&](const String& folder) -> bool
+	{
+		String scriptPath = Path::Normalize(folder + result.fname + ".lua");
+		File f;
+		if (!f.OpenRead(scriptPath))
+			return false;
+		String source;
+		source.resize(f.GetSize());
+		f.Read(source.data(), source.size());
+		result.folderPath = folder;
+		result.scriptSource = std::move(source);
+		result.found = true;
+		return true;
+	};
+
+	if (tryRead(folderPath))
+		return result;
+
+	// Same fallback the synchronous path uses - the chart's own layer script doesn't
+	// exist, try the skin's fallback background instead.
+	String fallbackFolder = Path::Absolute("skins/" + g_application->GetCurrentSkin() + "/backgrounds/fallback/");
+	tryRead(fallbackFolder);
+	return result;
+}
+
 /* Background template for fullscreen effects */
 class FullscreenBackground : public Background
 {
@@ -78,9 +128,18 @@ protected:
 class TestBackground : public FullscreenBackground
 {
 private:
-	bool m_init(String path)
+	// prefetchedSource, when non-null, is the already-resolved script's bytes read ahead
+	// of time on a worker thread (see PrefetchBackgroundScript) - skips re-reading the
+	// file from disk here. luaL_loadbuffer+lua_pcall replicates luaL_dofile's own
+	// load-then-call macro exactly, just from memory instead of disk; scriptPath is still
+	// passed as the chunk name so Lua error messages/tracebacks look identical either way.
+	bool m_init(String path, const String* prefetchedSource = nullptr)
 	{
-		if (luaL_dofile(lua, Path::Normalize(path + ".lua").c_str()))
+		String scriptPath = Path::Normalize(path + ".lua");
+		bool failed = prefetchedSource
+			? (luaL_loadbuffer(lua, prefetchedSource->data(), prefetchedSource->size(), scriptPath.c_str()) || lua_pcall(lua, 0, LUA_MULTRET, 0))
+			: luaL_dofile(lua, scriptPath.c_str());
+		if (failed)
 		{
 			Logf("Lua error: %s", Logger::Severity::Warning, lua_tostring(lua, -1));
 			return false;
@@ -186,6 +245,27 @@ public:
 
 		String matPath = "";
 		String fname = foreground ? "fg" : "bg";
+
+		// Already resolved and read on a worker thread (see PrefetchBackgroundScript) -
+		// skip redoing the same folder-resolution + disk probing here, straight to the
+		// in-memory script. Only returns early on success: if the prefetched script has a
+		// genuine Lua runtime error (the file existed and was readable, but running it
+		// failed - rare, distinct from "file not found"), fall through to the same
+		// synchronous fallback-folder retry the non-prefetched path below does, instead of
+		// giving up - a prefetch miss on the lua-error axis shouldn't be worse than not
+		// having prefetched at all. A prefetch that came back completely empty
+		// (scriptPrefetch->found == false - chart's layer AND the skin's fallback both
+		// genuinely don't exist) also falls through here, since there's nothing to retry
+		// on this thread that the logic below wouldn't repeat identically.
+		if (scriptPrefetch && scriptPrefetch->found)
+		{
+			folderPath = scriptPrefetch->folderPath;
+			String path = Path::Normalize(folderPath + fname);
+			if (m_init(path, &scriptPrefetch->scriptSource))
+				return true;
+			Logf("Failed to load %s at prefetched path: \"%s\" Attempting to load fallback instead.", Logger::Severity::Warning, foreground ? "foreground" : "background", folderPath);
+		}
+
 		String kshLayer = game->GetBeatmap()->GetMapSettings().foregroundPath;
 		String layer;
 
@@ -390,10 +470,11 @@ public:
 	}
 };
 
-Background *CreateBackground(class Game *game, bool foreground /* = false*/)
+Background *CreateBackground(class Game *game, bool foreground /* = false*/, const BackgroundScriptPrefetch* prefetch /* = nullptr*/)
 {
 	Background *bg = new TestBackground();
 	bg->game = game;
+	bg->scriptPrefetch = prefetch;
 	if (!bg->Init(foreground))
 	{
 		delete bg;

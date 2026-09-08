@@ -503,7 +503,7 @@ int DownloadScreen::m_DownloadArchive(lua_State* L)
 
 
 	m_archiveLock.lock();
-	m_archiveReqs.push(ArchiveRequest{ cpr::GetAsync(cpr::Url{ url }, header), id, callback });
+	m_archiveReqs.push(ArchiveRequest{ cpr::GetAsync(cpr::Url{ url }, header, cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")})), id, callback });
 	m_archiveLock.unlock();
 
 	return 0;
@@ -607,7 +607,7 @@ int DownloadScreen::m_PlayPreview(lua_State* L)
 	{
 		Logf("Requesting Preview URL %s", Logger::Severity::Info, url);
 		// TODO Move out of main thread?
-		cpr::Response preview_data = cpr::Get(cpr::Url{ url }, header);
+		cpr::Response preview_data = cpr::Get(cpr::Url{ url }, header, cpr::Ssl(cpr::ssl::CaInfo{Path::Absolute("cacert.pem")}));
 		auto response = preview_data;
 		if (response.error.code == cpr::ErrorCode::OK && response.status_code < 300)
 		{

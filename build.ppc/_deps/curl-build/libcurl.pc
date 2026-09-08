@@ -29,13 +29,13 @@ prefix=/usr/local
 exec_prefix=${prefix}
 libdir=/usr/local/lib
 includedir=${prefix}/include
-supported_protocols="HTTP"
-supported_features="IPv6 unixsockets libz AsynchDNS Largefile alt-svc HSTS threadsafe"
+supported_protocols="HTTP HTTPS"
+supported_features="SSL IPv6 unixsockets libz AsynchDNS Largefile alt-svc HSTS HTTPS-proxy threadsafe"
 
 Name: libcurl
 URL: https://curl.se/
 Description: Library to transfer files with ftp, http, etc.
 Version: 8.4.0
-Libs: -L${libdir} -lcurl  -lgcc -lef_ppc -framework SystemConfiguration -framework CoreFoundation -framework CoreServices /opt/ppc-deps/lib/libz.a
-Libs.private:  -lgcc -lef_ppc -framework SystemConfiguration -framework CoreFoundation -framework CoreServices /opt/ppc-deps/lib/libz.a
+Libs: -L${libdir} -lcurl  -lgcc -lef_ppc -framework SystemConfiguration -framework CoreFoundation -framework CoreServices /opt/ppc-deps/lib/libmbedtls.a /opt/ppc-deps/lib/libmbedx509.a /opt/ppc-deps/lib/libmbedcrypto.a /opt/ppc-deps/lib/libz.a
+Libs.private:  -lgcc -lef_ppc -framework SystemConfiguration -framework CoreFoundation -framework CoreServices /opt/ppc-deps/lib/libmbedtls.a /opt/ppc-deps/lib/libmbedx509.a /opt/ppc-deps/lib/libmbedcrypto.a /opt/ppc-deps/lib/libz.a
 Cflags: -I${includedir} -DCURL_STATICLIB

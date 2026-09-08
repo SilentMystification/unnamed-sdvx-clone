@@ -2525,6 +2525,12 @@ static int lCreateSkinImage(lua_State *L /*const char* filename, int imageflags 
 		lua_pushnumber(L, handle);
 		return 1;
 	}
+	// Same silent-failure gap as gfx.CreateImage (lCreateImage) had - this is a separate
+	// copy of the same nvgCreateImage-then-check pattern that never got the same fix. Real
+	// consequence here specifically: songwheel.lua's jacketFallback ("song_select/
+	// loading.png") loads through this exact function - if it fails too, no jacket ever
+	// shows anything at all, not even the loading placeholder.
+	Logf("gfx.CreateSkinImage: failed to load \"%s\"", Logger::Severity::Warning, path);
 	return 0;
 }
 

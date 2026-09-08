@@ -52,7 +52,7 @@ add_library(CURL::libcurl_static STATIC IMPORTED)
 set_target_properties(CURL::libcurl_static PROPERTIES
   INTERFACE_COMPILE_DEFINITIONS "CURL_STATICLIB"
   INTERFACE_INCLUDE_DIRECTORIES "/src/build.ppc/_deps/curl-src/include"
-  INTERFACE_LINK_LIBRARIES "-framework SystemConfiguration;-framework CoreFoundation -framework CoreServices;\$<LINK_ONLY:ZLIB::ZLIB>"
+  INTERFACE_LINK_LIBRARIES "-framework SystemConfiguration;-framework CoreFoundation -framework CoreServices;/opt/ppc-deps/lib/libmbedtls.a;/opt/ppc-deps/lib/libmbedx509.a;/opt/ppc-deps/lib/libmbedcrypto.a;\$<LINK_ONLY:ZLIB::ZLIB>"
 )
 
 # Import target "CURL::libcurl_static" for configuration "Release"

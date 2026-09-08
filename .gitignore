@@ -70,3 +70,4 @@ docs/source/_build
 
 /build.linux-out
 /usc-game.app
+/bin/usc-game.app

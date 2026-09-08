@@ -86,13 +86,13 @@ while test $# -gt 0; do
         ;;
 
     --feature|--features)
-        for feature in IPv6 unixsockets libz AsynchDNS Largefile alt-svc HSTS threadsafe ""; do
+        for feature in SSL IPv6 unixsockets libz AsynchDNS Largefile alt-svc HSTS HTTPS-proxy threadsafe ""; do
             test -n "$feature" && echo "$feature"
         done
         ;;
 
     --protocols)
-        for protocol in HTTP; do
+        for protocol in HTTP HTTPS; do
             echo "$protocol"
         done
         ;;
@@ -163,18 +163,18 @@ while test $# -gt 0; do
            CURLLIBDIR=""
         fi
         if test "Xno" = "Xno"; then
-          echo ${CURLLIBDIR}-lcurl  -lgcc -lef_ppc -framework SystemConfiguration -framework CoreFoundation -framework CoreServices /opt/ppc-deps/lib/libz.a
+          echo ${CURLLIBDIR}-lcurl  -lgcc -lef_ppc -framework SystemConfiguration -framework CoreFoundation -framework CoreServices /opt/ppc-deps/lib/libmbedtls.a /opt/ppc-deps/lib/libmbedx509.a /opt/ppc-deps/lib/libmbedcrypto.a /opt/ppc-deps/lib/libz.a
         else
           echo ${CURLLIBDIR}-lcurl
         fi
         ;;
     --ssl-backends)
-        echo ""
+        echo "mbedTLS"
         ;;
 
     --static-libs)
         if test "Xyes" != "Xno" ; then
-          echo "/usr/local/lib/libcurl.a"   -lgcc -lef_ppc -framework SystemConfiguration -framework CoreFoundation -framework CoreServices /opt/ppc-deps/lib/libz.a
+          echo "/usr/local/lib/libcurl.a"   -lgcc -lef_ppc -framework SystemConfiguration -framework CoreFoundation -framework CoreServices /opt/ppc-deps/lib/libmbedtls.a /opt/ppc-deps/lib/libmbedx509.a /opt/ppc-deps/lib/libmbedcrypto.a /opt/ppc-deps/lib/libz.a
         else
           echo "curl was built with static libraries disabled" >&2
           exit 1

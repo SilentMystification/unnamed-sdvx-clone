@@ -6,12 +6,14 @@ option(CPR_BUILD_TESTS "Set to ON to build cpr tests." OFF)
 if(USC_RENDER_BACKEND STREQUAL "GL1_LEGACY")
     # curl's Secure Transport backend hard-requires Leopard (10.5+) at compile time
     # (its own sectransp.c: "#error requires Leopard or later") - a real wall on our 10.4
-    # target, not a missing header to work around. No PPC/10.4 build of OpenSSL/mbedTLS
-    # exists either (same class of gap as Freetype/libpng/etc - see
-    # humming-sleeping-stonebraker.md). HTTP-only networking (song downloads, update
-    # checks, multiplayer) is an accepted degradation here, same as Discord RPC/gamepad/
-    # IME elsewhere in this port - not chasing a TLS cross-build for it.
-    set(CPR_ENABLE_SSL OFF)
+    # target, not a missing header to work around, and there's no PPC/10.4 build of OpenSSL
+    # either. mbedTLS has neither problem (pure portable C, no OS-native-crypto-API
+    # dependency) and is cross-built for this target the same way as Freetype/libpng/etc -
+    # see cmake/Toolchains/ppc-apple-darwin8.cmake's MBEDTLS_* cache seeds. cpr/curl both
+    # have first-class mbedTLS support already (CPR_FORCE_MBEDTLS_BACKEND), so this is
+    # real HTTPS, not a degradation.
+    set(CPR_ENABLE_SSL ON)
+    set(CPR_FORCE_MBEDTLS_BACKEND ON)
 else()
     set(CPR_ENABLE_SSL ON)
 endif()

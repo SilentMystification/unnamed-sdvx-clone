@@ -87,6 +87,20 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 set(ZLIB_INCLUDE_DIR "${USC_PPC_DEPS_ROOT}/include" CACHE PATH "" FORCE)
 set(ZLIB_LIBRARY_RELEASE "${USC_PPC_DEPS_ROOT}/lib/libz.a" CACHE FILEPATH "" FORCE)
 
+# mbedTLS, cross-built for this target the same way as the deps above (see
+# USC_PPC_DEPS_ROOT's own comment) - real HTTPS support for this platform. Apple's own TLS
+# (Secure Transport) hard-requires 10.5+ at compile time (curl/lib/vtls/sectransp.c:
+# "#error requires Leopard or later" - not a missing header, a real wall), and no PPC/10.4
+# build of OpenSSL exists either; mbedTLS is pure portable C with no OS-native-crypto-API
+# dependency, so it has neither problem. Matching FindMbedTLS.cmake's own variable names
+# (curl's CMake/FindMbedTLS.cmake) directly, same pre-seed pattern as FREETYPE_*/ZLIB_*
+# above rather than trusting find_path/find_library - there's no known sysroot-bundled
+# mbedTLS to conflict with here, but pre-seeding keeps this consistent and unambiguous.
+set(MBEDTLS_INCLUDE_DIRS "${USC_PPC_DEPS_ROOT}/include" CACHE PATH "")
+set(MBEDTLS_LIBRARY "${USC_PPC_DEPS_ROOT}/lib/libmbedtls.a" CACHE FILEPATH "")
+set(MBEDX509_LIBRARY "${USC_PPC_DEPS_ROOT}/lib/libmbedx509.a" CACHE FILEPATH "")
+set(MBEDCRYPTO_LIBRARY "${USC_PPC_DEPS_ROOT}/lib/libmbedcrypto.a" CACHE FILEPATH "")
+
 # libpng's own cross-build produced BOTH a static libpng16.a and a shared png.framework in
 # USC_PPC_DEPS_ROOT/lib - CMake's default CMAKE_FIND_FRAMEWORK=FIRST on Apple targets means
 # FindPNG.cmake picked the framework, and that framework's install_name is an absolute path

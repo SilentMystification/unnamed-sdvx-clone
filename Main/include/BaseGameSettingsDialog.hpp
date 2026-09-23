@@ -153,6 +153,17 @@ protected:
     // "navigate between sub-options" without losing BT0-3 as a way to edit values.
     virtual void m_NavigateColumn(int steps);
 
+    // Called before the default BT_S/Select press (m_PressSetting) acts. Return
+    // true to consume it - e.g. the Drills tab uses this to "focus" a numeric
+    // cell for knob/BT adjustment instead of the row doing nothing on press.
+    virtual bool OnPressSetting() { return false; }
+
+    // The SettingData under the cursor, or nullptr if the index is out of range.
+    [[nodiscard]] SettingData* m_CurrentSettingData();
+    [[nodiscard]] bool m_IsEditingValue() const noexcept { return m_editingSetting != nullptr; }
+    // Enter the focused/typed edit state on an Integer/String row (see m_editingSetting).
+    void m_StartEditingValue(SettingData* setting, bool startEmpty = false);
+
     Vector2 m_pos = { 0.5f, 0.5f };
 
 private:
@@ -175,11 +186,13 @@ private:
     // also trigger unrelated dialog actions, the same way SongSelect's search
     // bar suppresses normal input while it has focus.
     void m_OnEnterPressed();
-    // startEmpty: true for "start typing to overwrite" (Excel-style - the
-    // triggering character is applied on top of an empty buffer), false for
-    // "Enter to modify" (buffer preloaded with the current value).
-    void m_StartEditingValue(SettingData* setting, bool startEmpty = false);
+    // m_StartEditingValue (declared protected above): startEmpty true = "start
+    // typing to overwrite" (Excel-style), false = "Enter to modify" (buffer
+    // preloaded with the current value).
     void m_StopEditingValue();
+    // Knob-R / BT0-3 nudge for a focused Integer m_editingSetting: previews the
+    // clamped value + keeps m_editBuffer in sync, setter still runs only on commit.
+    void m_NudgeEditingValue(int step);
     void m_CommitEditingValue();
     void m_CancelEditingValue();
     void m_OnEditTextInput(const String& text);

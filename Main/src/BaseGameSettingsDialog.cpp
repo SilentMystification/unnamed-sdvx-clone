@@ -72,7 +72,22 @@ void BaseGameSettingsDialog::Tick(float deltaTime)
     }
 
     if (m_editingSetting)
-        return; // typed entry in progress - knobs shouldn't navigate or step values
+    {
+        // A focused numeric cell (see OnPressSetting / m_OnEnterPressed): knob-R
+        // nudges the value so a controller can adjust it with no keyboard. The
+        // rest of input stays frozen until the edit commits, and knob-L isn't
+        // allowed to bank a row jump for when it does.
+        if (m_editingSetting->type == SettingType::Integer)
+        {
+            for (size_t i = 0; i < 2; i++)
+                m_knobAdvance[i] += g_input.GetInputLaserDir(i) * m_sensMult;
+            const int step = static_cast<int>(truncf(m_knobAdvance[1]));
+            m_knobAdvance[1] -= step;
+            m_knobAdvance[0] = 0.0f;
+            m_NudgeEditingValue(step);
+        }
+        return;
+    }
 
     //tick inputs
     for (size_t i = 0; i < 2; i++)
@@ -335,7 +350,13 @@ void BaseGameSettingsDialog::m_OnButtonPressed(Input::Button button, int32 delta
         return;
 
     if (m_editingSetting)
-        return; // typed entry has its own Enter/Escape handling in m_OnKeyPressed
+    {
+        // BT_S is the controller's commit while a cell is focused (keyboard uses
+        // Enter, handled in m_OnKeyPressed); other buttons stay inert mid-edit.
+        if (button == Input::Button::BT_S)
+            m_CommitEditingValue();
+        return;
+    }
 
     switch (button)
     {
@@ -364,7 +385,19 @@ void BaseGameSettingsDialog::m_OnButtonReleased(Input::Button button, int32 delt
         return;
 
     if (m_editingSetting)
+    {
+        // Same ±1 / ±5 nudge BT0-3 give a value elsewhere, applied to the focused
+        // cell's live preview (commit still happens on BT_S / Enter).
+        switch (button)
+        {
+        case Input::Button::BT_0: m_NudgeEditingValue(-5); break;
+        case Input::Button::BT_1: m_NudgeEditingValue(-1); break;
+        case Input::Button::BT_2: m_NudgeEditingValue(1); break;
+        case Input::Button::BT_3: m_NudgeEditingValue(5); break;
+        default: break;
+        }
         return;
+    }
 
     switch (button)
     {
@@ -469,6 +502,9 @@ void BaseGameSettingsDialog::m_PressSetting()
     if (static_cast<size_t>(m_currentSetting) >= m_tabs[m_currentTab]->settings.size())
         return;
 
+    if (OnPressSetting())
+        return; // a subclass took the press (e.g. focused a Drills-tab numeric cell)
+
     auto currentSetting = m_tabs[m_currentTab]->settings.at(m_currentSetting).get();
 
     if (currentSetting->invalid)
@@ -490,6 +526,25 @@ void BaseGameSettingsDialog::m_PressSetting()
     currentSetting->setter.Call(*currentSetting);
 }
 
+BaseGameSettingsDialog::SettingData* BaseGameSettingsDialog::m_CurrentSettingData()
+{
+    if (static_cast<size_t>(m_currentSetting) >= m_tabs[m_currentTab]->settings.size())
+        return nullptr;
+    return m_tabs[m_currentTab]->settings.at(m_currentSetting).get();
+}
+
+void BaseGameSettingsDialog::m_NudgeEditingValue(int step)
+{
+    if (step == 0 || !m_editingSetting || m_editingSetting->type != SettingType::Integer)
+        return;
+
+    const int v = Math::Clamp(
+        m_editingSetting->intSetting.val + step * m_editingSetting->intSetting.step,
+        m_editingSetting->intSetting.min, m_editingSetting->intSetting.max);
+    m_editingSetting->intSetting.val = v;
+    m_editBuffer = Utility::Sprintf("%d", v); // so m_CommitEditingValue re-parses this value
+}
+
 void BaseGameSettingsDialog::m_OnEnterPressed()
 {
     if (static_cast<size_t>(m_currentSetting) >= m_tabs[m_currentTab]->settings.size())
@@ -497,11 +552,12 @@ void BaseGameSettingsDialog::m_OnEnterPressed()
 
     auto currentSetting = m_tabs[m_currentTab]->settings.at(m_currentSetting).get();
 
-    // Typing needs a keyboard - a controller-only player can't Escape back out.
+    // Reached only from a real keyboard event (OnKeyPressed), so a keyboard is
+    // present even when ButtonInputDevice is Controller - a controller-for-buttons
+    // + keyboard-for-typing setup must still be able to edit these fields.
     if (currentSetting->type == SettingType::Integer || currentSetting->type == SettingType::String)
     {
-        if (g_gameConfig.GetEnum<Enum_InputDevice>(GameConfigKeys::ButtonInputDevice) == InputDevice::Keyboard)
-            m_StartEditingValue(currentSetting);
+        m_StartEditingValue(currentSetting);
         return;
     }
 
@@ -583,8 +639,8 @@ void BaseGameSettingsDialog::m_OnEditTextInput(const String& text)
         SettingData* currentSetting = m_tabs[m_currentTab]->settings.at(m_currentSetting).get();
         if (currentSetting->type != SettingType::Integer && currentSetting->type != SettingType::String)
             return;
-        if (g_gameConfig.GetEnum<Enum_InputDevice>(GameConfigKeys::ButtonInputDevice) != InputDevice::Keyboard)
-            return;
+        // A text-input event means a keyboard is producing it, regardless of what
+        // ButtonInputDevice is set to - see m_OnEnterPressed.
 
         targetSetting = currentSetting;
     }

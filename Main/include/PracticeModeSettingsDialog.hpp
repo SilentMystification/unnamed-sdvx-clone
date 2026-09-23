@@ -36,6 +36,10 @@ private:
 	void OnDeleteKeyPressed() override;
 	void OnUndoPressed() override;
 	void OnRedoPressed() override;
+	// BT_S / Select on a Drills-tab numeric cell "focuses" it (starts a value
+	// edit) instead of doing nothing - knob-R and BT0-3 then adjust it, BT_S/
+	// Enter commits. Returns false (default press) everywhere else.
+	bool OnPressSetting() override;
 	void m_SaveDrillsIfDirty();
 
 	// On the Drills tab: Up/Down moves between drills (landing on Select), Left/

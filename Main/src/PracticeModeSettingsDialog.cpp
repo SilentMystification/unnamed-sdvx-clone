@@ -360,6 +360,24 @@ void PracticeModeSettingsDialog::m_NavigateColumn(int steps)
     SetCurrentSetting(base + newCol);
 }
 
+bool PracticeModeSettingsDialog::OnPressSetting()
+{
+    // Drills tab only: BT_S / Select on one of a drill's numeric cells (In/Out
+    // measure & beat - the only Integer sub-fields) focuses it for knob-R / BT0-3
+    // adjustment, since a bare press would otherwise do nothing on those rows.
+    // Everywhere else, fall through to the normal press.
+    if (GetCurrentTab() != kDrillsTabIndex || m_IsEditingValue())
+        return false;
+
+    SettingData* s = m_CurrentSettingData();
+    if (!s || s->type != SettingType::Integer)
+        return false;
+
+    m_pendingDeleteIndex = -1; // consistent with the other navigation entry points
+    m_StartEditingValue(s);
+    return true;
+}
+
 PracticeModeSettingsDialog::Tab PracticeModeSettingsDialog::m_CreateMainSettingTab()
 {
     Tab mainSettingTab = std::make_unique<TabData>();

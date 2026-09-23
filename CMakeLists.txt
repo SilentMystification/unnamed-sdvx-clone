@@ -81,7 +81,7 @@ if (${CMAKE_VERSION} VERSION_GREATER "4.0")
         CREATE_LINK
         ${PROJECT_SOURCE_DIR}/third_party/rapidjson
         ${PROJECT_SOURCE_DIR}/third_party/discord-rpc/thirdparty/rapidjson
-        SYMBOLIC
+        COPY_ON_ERROR SYMBOLIC
     )
 endif()
 
